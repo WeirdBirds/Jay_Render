@@ -43,7 +43,7 @@ create_device :: () {
             continue;
         }
 
-        if !supports_present && q_ids.compute < 0 && (queue_family_properties[j].queueFlags & .COMPUTE_BIT) {        
+        if q_ids.compute < 0 && (queue_family_properties[j].queueFlags & .COMPUTE_BIT) {        
             q_ids.compute = j;
             continue;
         }
@@ -67,10 +67,16 @@ create_device :: () {
     queue_infos[1].queueCount = 1;
     queue_infos[1].pQueuePriorities = float.[1.0].data;
 
-    // TRANSFER QUEUES
+    // COMPUTE QUEUES
     queue_infos[2].queueFamilyIndex = xx q_ids.compute;
     queue_infos[2].queueCount = 1;
     queue_infos[2].pQueuePriorities = float.[1.0].data;
+
+    log("\t GRAPHICS QUEUES: %", q_ids.graphics);
+    log("\t TRANSFER QUEUES: %", q_ids.transfer);
+    log("\t COMPUTE QUEUES: %", q_ids.compute);
+
+
 
     extensions: [1]*u8;
     extensions[0] = VK_KHR_SWAPCHAIN_EXTENSION_NAME.data;

@@ -1,7 +1,6 @@
 create_pipeline :: () {
     shader_module := create_shader_module("test");
 
-
     shader_stages: []VkPipelineShaderStageCreateInfo = .[    
         .{ 
             stage = .VERTEX_BIT, 
@@ -29,6 +28,8 @@ create_pipeline :: () {
     vertex_assembly: VkPipelineInputAssemblyStateCreateInfo = .{
         topology = .TRIANGLE_LIST,
     };
+}
 
-    
+destroy_pipeline :: () {
+    clear_shaders();
 }

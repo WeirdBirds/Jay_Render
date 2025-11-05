@@ -68,4 +68,4 @@ Command_Buffer_Set :: struct {
 
 #scope_module
 
-FRAME_COUNT :: 2;
+FRAME_COUNT :: 3;

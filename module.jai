@@ -2,8 +2,10 @@
 #import "jai-sdl3";
 #import "Basic";
 #import "Jay_Core";
+#import "Hash_Table";
 
-#load "constant.jai";
 #load "package.jai";
 #load "vulkan.jai";
 #load "test_render/test.jai";
+
+DEBUG :: true;

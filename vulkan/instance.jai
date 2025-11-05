@@ -1,4 +1,3 @@
-DEBUG :: true;
 
 #if DEBUG {
 debug_callback_handle : VkDebugReportCallbackEXT;
@@ -19,17 +18,30 @@ create_instance :: () {
     app_info.apiVersion = api_version;
 
     create_info: VkInstanceCreateInfo = .{};
-    create_info.pApplicationInfo = *app_info;
+    create_info.pApplicationInfo = *app_info;     
 
     #if !DEBUG {
-        extensions: [2] *u8;
-        extensions[0] = VK_KHR_SURFACE_EXTENSION_NAME.data;
-        extensions[1] = VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME.data;
+        #if OS == .WINDOWS {
+            extensions: [2] *u8;
+            extensions[0] = VK_KHR_SURFACE_EXTENSION_NAME.data;
+            extensions[1] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME.data;
+        } else #if OS == .LINUX {
+            extensions: [2] *u8;
+            extensions[0] = VK_KHR_SURFACE_EXTENSION_NAME.data;
+            extensions[1] = ifx COMPOSER == .WAYLAND then VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME.data else VK_KHR_XLIB_SURFACE_EXTENSION_NAME.data; 
+        }
+
     } else {
+        #if OS == .WINDOWS {
+            extensions: [3] *u8;
+            extensions[0] = VK_KHR_SURFACE_EXTENSION_NAME.data;
+            extensions[1] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME.data;
+            extensions[2] = VK_EXT_DEBUG_REPORT_EXTENSION_NAME.data;
+        } else 
         #if OS == .LINUX {
             extensions: [3] *u8;
             extensions[0] = VK_KHR_SURFACE_EXTENSION_NAME.data;
-            extensions[1] = VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME.data;
+            extensions[1] = ifx COMPOSER == .WAYLAND then VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME.data else VK_KHR_XLIB_SURFACE_EXTENSION_NAME.data;
             extensions[2] = VK_EXT_DEBUG_REPORT_EXTENSION_NAME.data;
         }
     }

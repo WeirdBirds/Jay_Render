@@ -24,6 +24,7 @@ init_vulkan :: () {
 
 deinit_vulkan :: () {
     destroy_render();
+    destroy_pipeline();
     destroy_swapchain();
     destroy_device();
     destroy_surface();

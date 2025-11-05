@@ -16,12 +16,15 @@ create_image_view :: (image: VkImage, format: VkFormat, components: VkComponentM
 
     return view;
 }
-create_swapchain_image_view :: #bake_arguments create_image_view(components = .{
+create_swapchain_image_view :: #bake_arguments 
+    create_image_view(
+        components = .{
             .IDENTITY,
             .IDENTITY,
             .IDENTITY,
             .IDENTITY
-        }, subresource_range = .{
+        }, 
+        subresource_range = .{
             aspectMask = .COLOR_BIT,
             baseMipLevel = 0,
             levelCount = 1,

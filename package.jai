@@ -1,3 +1,4 @@
+COMPOSER : ComposerType = .UNKNOWN;
 
 Jay_Render :: struct {
 
@@ -9,13 +10,17 @@ Jay_Render :: struct {
 
         default_logger = context.logger;
 
-        if (SDL_getenv("WAYLAND_DISPLAY")) {
-
-            SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland");
-
+        #if OS == .LINUX {
+            if (!DEBUG && SDL_getenv("WAYLAND_DISPLAY")) {
+                COMPOSER = .WAYLAND;
+                SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland");
+            } else {
+                COMPOSER = .X11;
+            }
         }
-        SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
 
+        SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
+        
         render_app.frame_size = .{ 1600, 800 };
 
         render_app.window = SDL_CreateWindow("Hello Sailor", xx render_app.frame_size.width, xx render_app.frame_size.height, SDL_WINDOW_VULKAN);
@@ -44,7 +49,6 @@ Jay_Render :: struct {
         draw_frame();
     }
 
-
     after_end :: (engine: *Engine) {
         log("\nShutting down!");
         deinit_vulkan();
@@ -54,6 +58,13 @@ Jay_Render :: struct {
 
 
 #scope_module
+
+ComposerType :: enum {
+    UNKNOWN;
+    WINDOWS;
+    X11;
+    WAYLAND;
+}
 
 Render_App :: struct {
     frame_size: Frame_Size;
