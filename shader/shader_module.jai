@@ -16,15 +16,13 @@
 
     shader_compiler_available :: () -> bool
     {
-        slang_bin := sprint("%/engine/Slang/lib/linux/slangc", get_working_directory());
-        result := run_command(slang_bin, "-version", capture_and_return_output = true);
+        result := run_command("slangc", "-version", capture_and_return_output = true);
         return result.exit_code == 0;
     }
 
     build_shader :: (filename : string, output : string) #expand
     {
-        slang_bin := sprint("%/engine/Slang/lib/linux/slangc", get_working_directory());
-        result, out_string, error_string := run_command(slang_bin, filename, "-o", output, "-target", "spirv", "-profile", "spirv_1_5", "-emit-spirv-directly", capture_and_return_output = true);
+        result, out_string, error_string := run_command("slangc", filename, "-o", output, "-target", "spirv", "-profile", "spirv_1_5", "-emit-spirv-directly", capture_and_return_output = true);
         if result.exit_code != 0
             log("Couldn't build shader %!! Error: %\n", filename, out_string);
         else
