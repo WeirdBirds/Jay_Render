@@ -78,8 +78,9 @@ create_device :: () {
 
 
 
-    extensions: [1]*u8;
-    extensions[0] = VK_KHR_SWAPCHAIN_EXTENSION_NAME.data;
+    extensions: [2]*u8;
+    extensions[0] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+    extensions[1] = VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME;
  
     device_info: VkDeviceCreateInfo = .{};
     device_info.queueCreateInfoCount = queue_infos.count;

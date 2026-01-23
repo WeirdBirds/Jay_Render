@@ -11,7 +11,7 @@ Jay_Render :: struct {
         default_logger = context.logger;
 
         #if OS == .LINUX {
-            if (!DEBUG && SDL_getenv("WAYLAND_DISPLAY")) {
+            if (!LINUX_RENDERDOC && SDL_getenv("WAYLAND_DISPLAY")) {
                 COMPOSER = .WAYLAND;
                 SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland");
             } else {

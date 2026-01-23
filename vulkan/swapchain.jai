@@ -15,7 +15,7 @@ create_swapchain :: () {
   
     presentModeCount: u32 = 0;
     vkGetPhysicalDeviceSurfacePresentModesKHR(render_app.physical_device, render_app.surface, *presentModeCount, null);
-    presentModes: [MAX_PRESENT_MODE_COUNT]VkPresentModeKHR;
+    presentModes: [MAX_PRESENT_MODE_COUNT] VkPresentModeKHR;
     presentModeCount = min(presentModeCount, MAX_PRESENT_MODE_COUNT);
     vkGetPhysicalDeviceSurfacePresentModesKHR(render_app.physical_device, render_app.surface, *presentModeCount, presentModes.data);
 
@@ -27,7 +27,7 @@ create_swapchain :: () {
         }
     }
 
-    render_app.swapchain_data.swapchainImageCount = ifx presentMode == .MAILBOX_KHR  then PRESENT_MODE_MAILBOX_IMAGE_COUNT else  PRESENT_MODE_DEFAULT_IMAGE_COUNT;
+    render_app.swapchain_data.swapchainImageCount = ifx presentMode == .MAILBOX_KHR  then PRESENT_MODE_MAILBOX_IMAGE_COUNT else PRESENT_MODE_DEFAULT_IMAGE_COUNT;
 
     surfaceCapabilities: VkSurfaceCapabilitiesKHR;
 

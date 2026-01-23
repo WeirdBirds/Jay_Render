@@ -9,3 +9,4 @@
 #load "test_render/test.jai";
 
 DEBUG :: true;
+LINUX_RENDERDOC :: false;
