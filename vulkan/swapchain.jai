@@ -81,7 +81,6 @@ destroy_swapchain :: () {
 #scope_file
 
 MAX_PRESENT_MODE_COUNT :: 6; // At the moment in spec
-MAX_SWAPCHAIN_IMAGES   :: 3;
 
 PRESENT_MODE_MAILBOX_IMAGE_COUNT :u32: 3;
 PRESENT_MODE_DEFAULT_IMAGE_COUNT :u32: 2;
