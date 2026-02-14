@@ -7,9 +7,12 @@ Swapchain_Data :: struct {
   surfaceFormat  : VkSurfaceFormatKHR;
 }
 
-create_swapchain :: () {
-    formatCount : u32 = 1;
+create_swapchain :: (old_swapchain: VkSwapchainKHR = VK_NULL_HANDLE) {
+    // Query how many formats are available, then fetch only the first one —
+    // Swapchain_Data only stores a single VkSurfaceFormatKHR.
+    formatCount : u32 = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(render_app.physical_device, render_app.surface, *formatCount, null);
+    formatCount = 1;
     vkGetPhysicalDeviceSurfaceFormatsKHR(render_app.physical_device, render_app.surface, *formatCount, *render_app.swapchain_data.surfaceFormat);
     render_app.swapchain_data.surfaceFormat.format = ifx render_app.swapchain_data.surfaceFormat.format == .UNDEFINED then .B8G8R8A8_UNORM else render_app.swapchain_data.surfaceFormat.format;
   
@@ -53,14 +56,16 @@ create_swapchain :: () {
     swapchain_info.compositeAlpha = .OPAQUE_BIT_KHR;
     swapchain_info.presentMode = presentMode;
     swapchain_info.clipped = VK_TRUE;
+    swapchain_info.oldSwapchain = old_swapchain;
 
     result := vkCreateSwapchainKHR(render_app.device, *swapchain_info, null, *render_app.swapchain_data.swapchain);
     
     if result != .SUCCESS {
-      log_error("Unable co create_swapchain: %", result);
+      log_error("Unable to create_swapchain: %", result);
     }
 
     vkGetSwapchainImagesKHR(render_app.device, render_app.swapchain_data.swapchain, *render_app.swapchain_data.swapchainImageCount, null);
+    assert(render_app.swapchain_data.swapchainImageCount <= MAX_SWAPCHAIN_IMAGES, "Swapchain image count (%) exceeds MAX_SWAPCHAIN_IMAGES (%)", render_app.swapchain_data.swapchainImageCount, MAX_SWAPCHAIN_IMAGES);
     vkGetSwapchainImagesKHR(render_app.device, render_app.swapchain_data.swapchain, *render_app.swapchain_data.swapchainImageCount, render_app.swapchain_data.swapchainImages.data);
 
 
@@ -76,6 +81,48 @@ destroy_swapchain :: () {
     }
 
     vkDestroySwapchainKHR(render_app.device, render_app.swapchain_data.swapchain, null); 
+}
+
+recreate_swapchain :: () {
+    // Wait until the window has a non-zero size (e.g. minimized)
+    w, h: s32;
+    SDL_GetWindowSizeInPixels(render_app.window, *w, *h);
+    while w == 0 || h == 0 {
+        SDL_WaitEvent(null);
+        SDL_GetWindowSizeInPixels(render_app.window, *w, *h);
+    }
+
+    vkDeviceWaitIdle(render_app.device);
+
+    // Save old swapchain handle — the driver can retire internal resources
+    // more gracefully when we pass it to vkCreateSwapchainKHR.
+    old_swapchain := render_app.swapchain_data.swapchain;
+
+    // Destroy image views (they reference old swapchain images)
+    for index: 0..render_app.swapchain_data.swapchainImageCount-1 {
+        vkDestroyImageView(render_app.device, render_app.swapchain_data.imageViews[index], null);
+    }
+
+    // Update frame size from the actual window
+    render_app.frame_size.width  = xx w;
+    render_app.frame_size.height = xx h;
+
+    // Create new swapchain, passing old handle so the driver can reuse resources
+    create_swapchain(old_swapchain);
+
+    // Now destroy the old swapchain handle
+    vkDestroySwapchainKHR(render_app.device, old_swapchain, null);
+
+    // Don't recreate sync objects — after vkDeviceWaitIdle all fences are
+    // signaled and semaphores are unsignaled, so they're in a clean state.
+    // Destroying/recreating them crashes Nvidia 590.x drivers.
+
+    // Reset frame index so we start clean with fence[0]
+    render_app.render_data.frame_index = 0;
+
+    render_app.framebuffer_resized = false;
+
+    log("Swapchain recreated: %x%", render_app.swapchain_data.swapchainExtent.width, render_app.swapchain_data.swapchainExtent.height);
 }
 
 #scope_file

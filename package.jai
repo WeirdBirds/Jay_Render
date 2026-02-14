@@ -23,7 +23,7 @@ Jay_Render :: struct {
         
         render_app.frame_size = .{ 1600, 800 };
 
-        render_app.window = SDL_CreateWindow("Hello Sailor", xx render_app.frame_size.width, xx render_app.frame_size.height, SDL_WINDOW_VULKAN);
+        render_app.window = SDL_CreateWindow("Hello Sailor", xx render_app.frame_size.width, xx render_app.frame_size.height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
 
         init_vulkan();
     }
@@ -40,13 +40,33 @@ Jay_Render :: struct {
                 case xx SDL_EventType.KEY_DOWN;
                     if ev.key.key == SDLK_ESCAPE
                         engine.is_running = false;
+
+                case xx SDL_EventType.WINDOW_RESIZED;
+                    // Ignore the initial configure event from Wayland — the
+                    // swapchain was just created with the correct extent.
+                    if render_app.frames_rendered > 0 {
+                        render_app.framebuffer_resized = true;
+                    }
+
                 case; 
             } 
+        }
+
+        // Handle pending resize before drawing — recreate swapchain once,
+        // then draw with the fresh swapchain.
+        if render_app.framebuffer_resized {
+            recreate_swapchain();
         }
     }
 
     after_tick :: (engine: *Engine) {
-        draw_frame();
+        success := draw_frame();
+        render_app.frames_rendered += 1;
+        if !success && !render_app.framebuffer_resized {
+            // Acquire or present reported out-of-date — recreate for next frame.
+            // Skip if framebuffer_resized is already set — before_tick will handle it.
+            render_app.framebuffer_resized = true;
+        }
     }
 
     after_end :: (engine: *Engine) {
@@ -57,7 +77,7 @@ Jay_Render :: struct {
 }
 
 
-#scope_module
+// Public for engine modules
 
 ComposerType :: enum {
     UNKNOWN;
@@ -68,6 +88,8 @@ ComposerType :: enum {
 
 Render_App :: struct {
     frame_size: Frame_Size;
+    framebuffer_resized: bool;
+    frames_rendered: u64;
     window: *SDL_Window; 
     instance: VkInstance;
     surface: VkSurfaceKHR;

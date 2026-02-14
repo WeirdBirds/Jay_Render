@@ -72,17 +72,23 @@ create_device :: () {
     queue_infos[2].queueCount = 1;
     queue_infos[2].pQueuePriorities = float.[1.0].data;
 
-    log("\t GRAPHICS QUEUES: %", q_ids.graphics);
-    log("\t TRANSFER QUEUES: %", q_ids.transfer);
-    log("\t COMPUTE QUEUES: %", q_ids.compute);
+    log("\t GRAPHICS QUEUE: %", q_ids.graphics);
+    log("\t TRANSFER QUEUE: %", q_ids.transfer);
+    log("\t COMPUTE QUEUE: %", q_ids.compute);
 
 
 
     extensions: [2]*u8;
     extensions[0] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
     extensions[1] = VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME;
- 
+
+    // Enable Vulkan 1.3 features (dynamic rendering, synchronization2)
+    vulkan13_features: VkPhysicalDeviceVulkan13Features;
+    vulkan13_features.dynamicRendering = VK_TRUE;
+    vulkan13_features.synchronization2 = VK_TRUE;
+
     device_info: VkDeviceCreateInfo = .{};
+    device_info.pNext = *vulkan13_features;
     device_info.queueCreateInfoCount = queue_infos.count;
     device_info.pQueueCreateInfos = queue_infos.data;
     device_info.enabledLayerCount = 0;

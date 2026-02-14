@@ -36,6 +36,34 @@ destroy_render :: () {
     vkDestroyCommandPool(render_app.device, render_app.cmd_pools.compute, null);
 }
 
+// Destroy and recreate fences + semaphores. Called during swapchain recreation
+// to avoid corrupted sync state after a failed acquire on some drivers.
+recreate_sync_objects :: () {
+    // Destroy old
+    for 0..FRAME_COUNT - 1 {
+        vkDestroyFence(render_app.device, render_app.render_data.frame_fences[it], null);
+        vkDestroySemaphore(render_app.device, render_app.render_data.image_available_semaphores[it], null);
+    }
+
+    for 0..render_app.swapchain_data.swapchainImageCount - 1 {
+        vkDestroySemaphore(render_app.device, render_app.render_data.image_finished_semaphores[it], null);
+    }
+
+    // Create fresh
+    semaphore_info: VkSemaphoreCreateInfo = .{};
+    fence_info: VkFenceCreateInfo = .{};
+    fence_info.flags = .SIGNALED_BIT;
+
+    for 0..FRAME_COUNT - 1 {
+        vkCreateSemaphore(render_app.device, *semaphore_info, null, *render_app.render_data.image_available_semaphores[it]);
+        vkCreateFence(render_app.device, *fence_info, null, *render_app.render_data.frame_fences[it]);
+    }
+
+    for 0..render_app.swapchain_data.swapchainImageCount - 1 {
+        vkCreateSemaphore(render_app.device, *semaphore_info, null, *render_app.render_data.image_finished_semaphores[it]);
+    }
+}
+
 make_cmd_data :: (
         pool: *VkCommandPool,
         buffers: []VkCommandBuffer,
@@ -75,7 +103,7 @@ Command_Buffer_Set :: struct {
     compute: [FRAME_COUNT]VkCommandBuffer;
 }
 
-#scope_module
+// Public for engine modules
 
 FRAME_COUNT          :: 3;
 MAX_SWAPCHAIN_IMAGES :: 3;

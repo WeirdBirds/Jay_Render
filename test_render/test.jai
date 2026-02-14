@@ -1,15 +1,26 @@
-draw_frame :: () {
-    //print("Frame %\n", frame_index);
+draw_frame :: () -> bool {
 
     u64_low, u64_high := get_integer_range(u64);
 
     render_app.render_data.frame_index += 1;
     index := render_app.render_data.frame_index % FRAME_COUNT;    
     vkWaitForFences(render_app.device, 1, *render_app.render_data.frame_fences[index], VK_TRUE, u64_high);
-    vkResetFences(render_app.device, 1, *render_app.render_data.frame_fences[index]);
 
     imageIndex: u32;
-    vkAcquireNextImageKHR(render_app.device, render_app.swapchain_data.swapchain, u64_high, render_app.render_data.image_available_semaphores[index], VK_NULL_HANDLE, *imageIndex);
+    acquire_result := vkAcquireNextImageKHR(render_app.device, render_app.swapchain_data.swapchain, u64_high, render_app.render_data.image_available_semaphores[index], VK_NULL_HANDLE, *imageIndex);
+
+    if acquire_result == .ERROR_OUT_OF_DATE_KHR || acquire_result == .SUBOPTIMAL_KHR {
+        return false;
+    }
+
+    if acquire_result != .SUCCESS {
+        log_error("Failed to acquire swapchain image: %", acquire_result);
+        return false;
+    }
+
+    // Only reset the fence after a successful acquire — if we returned early
+    // the fence stays signaled so the next frame doesn't deadlock.
+    vkResetFences(render_app.device, 1, *render_app.render_data.frame_fences[index]);
 
     beginInfo: VkCommandBufferBeginInfo;
     beginInfo.flags = .ONE_TIME_SUBMIT_BIT;
@@ -50,8 +61,8 @@ draw_frame :: () {
     clearColor : VkClearColorValue;
     {
         // Pick a color with which to clear the screen.
-        color1 := Vec4f.{1,  1, 0, 1};
-        color2 := Vec4f.{.5, 0, 1, 1};
+        color1 := Vec4.{1,  1, 0, 1};
+        color2 := Vec4.{.5, 0, 1, 1};
 
         now := seconds_since_init();
         t := cos(cast(float) now) * .5 + .5;
@@ -96,7 +107,13 @@ draw_frame :: () {
     presentInfo.swapchainCount     = 1;
     presentInfo.pSwapchains        = *render_app.swapchain_data.swapchain;
     presentInfo.pImageIndices      = *imageIndex;
-    vkQueuePresentKHR(render_app.queues.graphics, *presentInfo);
+    present_result := vkQueuePresentKHR(render_app.queues.graphics, *presentInfo);
+
+    if present_result == .ERROR_OUT_OF_DATE_KHR || present_result == .SUBOPTIMAL_KHR {
+        return false;
+    }
+
+    return true;
 }
 
 
