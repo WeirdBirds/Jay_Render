@@ -19,19 +19,19 @@ create_device :: () {
     queue_family_count = min(queue_family_count, MAX_QUEUE_COUNT);
     vkGetPhysicalDeviceQueueFamilyProperties(render_app.physical_device, *queue_family_count, queue_family_properties.data);
 
-    log("\tQueue families: %", queue_family_count);
+    log("    Queue families: %", queue_family_count);
 
     q_ids := Queue_Indices.{};
 
     for j: 0..queue_family_count-1 {
-        log("\tQueue family %:", j);
+        log("    Queue family %:", j);
       
         supports_present := VK_FALSE;
         vkGetPhysicalDeviceSurfaceSupportKHR(render_app.physical_device, j, render_app.surface, *supports_present);
 
-        log("\t\tPresentation support %:", supports_present);
+        log("        Presentation support %:", supports_present);
 
-        print("\t\tQueue family properites: %.\n", FormatStruct.{formatter =.{queue_family_properties[j]}, draw_type_name=false, use_long_form_if_more_than_this_many_members = -1});
+        print("        Queue family properites: %.\n", FormatStruct.{formatter =.{queue_family_properties[j]}, draw_type_name=false, use_long_form_if_more_than_this_many_members = -1});
 
         if supports_present && q_ids.graphics < 0 && (queue_family_properties[j].queueFlags & .GRAPHICS_BIT) {        
             q_ids.graphics = j;
@@ -72,9 +72,9 @@ create_device :: () {
     queue_infos[2].queueCount = 1;
     queue_infos[2].pQueuePriorities = float.[1.0].data;
 
-    log("\t GRAPHICS QUEUE: %", q_ids.graphics);
-    log("\t TRANSFER QUEUE: %", q_ids.transfer);
-    log("\t COMPUTE QUEUE: %", q_ids.compute);
+    log("     GRAPHICS QUEUE: %", q_ids.graphics);
+    log("     TRANSFER QUEUE: %", q_ids.transfer);
+    log("     COMPUTE QUEUE: %", q_ids.compute);
 
 
 
@@ -114,9 +114,41 @@ destroy_device :: () {
     vkDestroyDevice(render_app.device, null);
 }
 
-get_suitable_device :: (device_handles: [] VkPhysicalDevice, count: u32) -> s64  {
-    // TODO: Find suitable device
-    return 0;
+get_suitable_device :: (device_handles: [] VkPhysicalDevice, count: u32) -> s64 {
+    best_device_id: s64 = 0;
+    best_score: s64 = -1;
+    
+    for i: 0..count-1 {
+        props: VkPhysicalDeviceProperties;
+        vkGetPhysicalDeviceProperties(device_handles[i], *props);
+        
+        // Score devices: DISCRETE_GPU=3, INTEGRATED_GPU=2, VIRTUAL_GPU=1, others=0
+        score: s64 = 0;
+        if props.deviceType == .DISCRETE_GPU {
+            score = 3;
+        } else if props.deviceType == .INTEGRATED_GPU {
+            score = 2;
+        } else if props.deviceType == .VIRTUAL_GPU {
+            score = 1;
+        }
+        
+        if score > best_score {
+            best_score = score;
+            best_device_id = i;
+        }
+        
+        // Log device info
+        device_name := to_string(props.deviceName.data);
+        log("    Device %: % (type: %)", i, device_name, props.deviceType);
+    }
+    
+    // Log selected device
+    selected_props: VkPhysicalDeviceProperties;
+    vkGetPhysicalDeviceProperties(device_handles[best_device_id], *selected_props);
+    selected_name := to_string(selected_props.deviceName.data);
+    log("Selected device: % (type: %)", selected_name, selected_props.deviceType);
+    
+    return best_device_id;
 }
 
 #scope_module

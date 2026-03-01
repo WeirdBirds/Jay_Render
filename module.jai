@@ -6,7 +6,6 @@
 
 #load "package.jai";
 #load "vulkan.jai";
-#load "test_render/test.jai";
 
 DEBUG :: true;
 LINUX_RENDERDOC :: false;

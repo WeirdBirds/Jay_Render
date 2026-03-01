@@ -7,6 +7,7 @@
 #load "vulkan/image.jai";
 #load "shader/shader_module.jai";
 #load "vulkan/pipeline.jai";
+#load "vulkan/memory.jai";
 
 init_vulkan :: () {
     load_global_proc_addresses();

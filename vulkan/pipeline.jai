@@ -1,3 +1,21 @@
+Pipeline_Data :: struct {
+    pipeline: VkPipeline;
+    pipeline_layout: VkPipelineLayout;
+}
+
+// Vertex input binding - describes the vertex buffer itself
+vertex_binding: VkVertexInputBindingDescription = .{
+    binding = 0,
+    stride = xx size_of(Test_Render.Vertex),
+    inputRate = .VERTEX,
+};
+
+// Vertex input attributes - describes each attribute in the buffer
+vertex_attributes: []VkVertexInputAttributeDescription = .[
+    .{ location = 0, binding = 0, format = .R32G32B32_SFLOAT, offset = 0 },           // position
+    .{ location = 1, binding = 0, format = .R32G32B32_SFLOAT, offset = 12 },        // color
+];
+
 create_pipeline :: () {
     shader_module := create_shader_module("test");
 
@@ -5,12 +23,12 @@ create_pipeline :: () {
         .{ 
             stage = .VERTEX_BIT, 
             module = shader_module,  
-            pName = "vertMain" 
+            pName = "vert_main" 
         },
         .{
             stage = .FRAGMENT_BIT,
             module = shader_module,
-            pName = "fragMain"
+            pName = "frag_main"
         }
     ]; 
     
@@ -23,13 +41,73 @@ create_pipeline :: () {
     dyn_state_info.dynamicStateCount = dynamic_states.count;
     dyn_state_info.pDynamicStates = dynamic_states.data;
 
-    vertex_info: VkPipelineVertexInputStateCreateInfo = .{};
+    vertex_info: VkPipelineVertexInputStateCreateInfo = .{
+        vertexBindingDescriptionCount = 1,
+        pVertexBindingDescriptions = *vertex_binding,
+        vertexAttributeDescriptionCount = xx vertex_attributes.count,
+        pVertexAttributeDescriptions = vertex_attributes.data,
+    };
 
     vertex_assembly: VkPipelineInputAssemblyStateCreateInfo = .{
         topology = .TRIANGLE_LIST,
     };
+
+    viewport_state: VkPipelineViewportStateCreateInfo = .{
+        viewportCount = 1,
+        scissorCount = 1,
+    };
+
+    rasterization_state: VkPipelineRasterizationStateCreateInfo = .{
+        polygonMode = .FILL,
+        cullMode = .BACK_BIT,
+        frontFace = .CLOCKWISE,
+        lineWidth = 1.0
+    };
+
+    multisample_state: VkPipelineMultisampleStateCreateInfo = .{
+        rasterizationSamples = ._1_BIT,   
+    };
+
+    color_blend_attachment: VkPipelineColorBlendAttachmentState = .{
+        colorWriteMask = .R_BIT | .G_BIT | .B_BIT | .A_BIT
+    };
+    
+    color_blend_state: VkPipelineColorBlendStateCreateInfo = .{
+        attachmentCount = 1,
+        pAttachments = *color_blend_attachment
+    };
+    
+    layout_info: VkPipelineLayoutCreateInfo = .{};
+    vkCreatePipelineLayout(render_app.device, *layout_info, null, *render_app.pipeline_data.pipeline_layout);
+    
+    color_format := render_app.swapchain_data.surfaceFormat.format;
+    pipeline_rendering: VkPipelineRenderingCreateInfo = .{
+        colorAttachmentCount = 1,
+        pColorAttachmentFormats = *color_format
+    };
+
+    pipeline_info: VkGraphicsPipelineCreateInfo = .{
+        pNext = *pipeline_rendering,
+        stageCount = xx shader_stages.count,
+        pStages = shader_stages.data,
+        pVertexInputState = *vertex_info,
+        pInputAssemblyState = *vertex_assembly,
+        pViewportState = *viewport_state,
+        pRasterizationState = *rasterization_state,
+        pMultisampleState = *multisample_state,
+        pColorBlendState = *color_blend_state,
+        pDynamicState = *dyn_state_info,
+        layout = render_app.pipeline_data.pipeline_layout,
+    };
+
+    result := vkCreateGraphicsPipelines(render_app.device, VK_NULL_HANDLE, 1, *pipeline_info, null, *render_app.pipeline_data.pipeline);
+    if result != .SUCCESS {
+        log_error("Failed to create graphics pipeline: %", result);
+    }
 }
 
 destroy_pipeline :: () {
+    vkDestroyPipeline(render_app.device, render_app.pipeline_data.pipeline, null);
+    vkDestroyPipelineLayout(render_app.device, render_app.pipeline_data.pipeline_layout, null);
     clear_shaders();
 }

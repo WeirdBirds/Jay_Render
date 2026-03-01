@@ -1,3 +1,5 @@
+#load "test_render/test.jai";
+
 COMPOSER : ComposerType = .UNKNOWN;
 
 Jay_Render :: struct {
@@ -26,6 +28,11 @@ Jay_Render :: struct {
         render_app.window = SDL_CreateWindow("Hello Sailor", xx render_app.frame_size.width, xx render_app.frame_size.height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
 
         init_vulkan();
+    }
+
+    begin :: (engine: *Engine) {
+        log("BEGIN!!!!----------------------------------------------------------");
+        Test_Render.upload_geometry();
     }
 
     before_tick :: (engine: *Engine) {
@@ -60,7 +67,7 @@ Jay_Render :: struct {
     }
 
     after_tick :: (engine: *Engine) {
-        success := draw_frame();
+        success := Test_Render.draw_frame();
         render_app.frames_rendered += 1;
         if !success && !render_app.framebuffer_resized {
             // Acquire or present reported out-of-date — recreate for next frame.
@@ -70,6 +77,8 @@ Jay_Render :: struct {
     }
 
     after_end :: (engine: *Engine) {
+        Test_Render.destroy_geometry();
+
         log("\nShutting down!");
         deinit_vulkan();
         log("Bye!\n");
@@ -101,6 +110,10 @@ Render_App :: struct {
     render_data: Render_Data;
     cmd_pools: Command_Pool_Set;
     cmd_buffers: Command_Buffer_Set;
+    
+    pipeline_data: Pipeline_Data;
+    vertex_buffer: GPU_Buffer;
+    index_buffer: GPU_Buffer;
 }
 
 Frame_Size :: struct {
