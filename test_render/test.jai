@@ -1,8 +1,22 @@
+camera: Camera = .{
+    transform   = .{ translation = .{ 0.0, 0.0, 2.5 } },
+    fov_radians = cast(float32) (60.0 * DEG_TO_RAD),
+    near_plane  = cast(float32) 0.1,
+    far_plane   = cast(float32) 100.0,
+};
+
+time_seconds: float32 = 0;
+
 Test_Render :: struct {
 
     Vertex :: struct {
         position: Vec3;
         color: Vec3;
+    }
+
+    Push_Constants :: struct {
+        mvp: Mat4;
+        time: float32;
     }
 
     cube_vertices :: Vertex.[
@@ -53,16 +67,31 @@ Test_Render :: struct {
         20, 21, 22,  22, 23, 20,
     ];
 
+    camera_zoom :: (delta: float32) {
+        camera.transform.translation.z = max(0.5, min(20.0, camera.transform.translation.z - delta * 0.2));
+    }
+
+    set_time_seconds :: (t: float32) {
+        time_seconds = t;
+    }
+
     upload_geometry :: () {
-            // Create device-local vertex buffer
-        vertex_size := size_of(Vertex) * cube_vertices.count;
+        // Copy vertices to mutable array and rotate
+        vertices: [cube_vertices.count]Vertex = cube_vertices;
+        rotation := to_matrix(to_quat(Euler.{45, 45, 0}));
+        for *vertices {
+            it.position = rotation * it.position;
+        }
+
+        // Create device-local vertex buffer
+        vertex_size := size_of(Vertex) * vertices.count;
         render_app.vertex_buffer = create_buffer(
             xx vertex_size,
             .VERTEX_BUFFER_BIT | .TRANSFER_DST_BIT,
             .DEVICE_LOCAL_BIT
         );
         log("Upload vertices");
-        upload_buffer_data_sync(*render_app.vertex_buffer, cube_vertices.data, xx vertex_size);
+        upload_buffer_data_sync(*render_app.vertex_buffer, vertices.data, xx vertex_size);
         // Create device-local index buffer
         index_size := size_of(u32) * cube_indices.count;
         render_app.index_buffer = create_buffer(
@@ -181,6 +210,19 @@ Test_Render :: struct {
         offsets: [1]u64 = .[0];
         vkCmdBindVertexBuffers(cmd, 0, 1, vertex_buffers.data, offsets.data);
         vkCmdBindIndexBuffer(cmd, render_app.index_buffer.buffer, 0, .UINT32);
+
+        aspect := cast(float32) extent.width / cast(float32) extent.height;
+        projection := get_projection_matrix(camera, aspect);
+        view := get_view_matrix(camera);
+        model := Mat4.identity();
+        angle := cast(float32) sin(cast(float64) time_seconds);
+        set_rotation(*model, angle, Vec3.{ 0.0, 1.0, 0.0 });
+        mvp := projection * view * model;
+
+        push: Push_Constants;
+        push.mvp = mvp;
+        push.time = time_seconds;
+        vkCmdPushConstants(cmd, render_app.pipeline_data.pipeline_layout, .VERTEX_BIT | .FRAGMENT_BIT, 0, xx size_of(Push_Constants), *push);
 
         // --- Draw indexed ---
         vkCmdDrawIndexed(cmd, xx cube_indices.count, 1, 0, 0, 0);

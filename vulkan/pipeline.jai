@@ -3,18 +3,12 @@ Pipeline_Data :: struct {
     pipeline_layout: VkPipelineLayout;
 }
 
-// Vertex input binding - describes the vertex buffer itself
-vertex_binding: VkVertexInputBindingDescription = .{
-    binding = 0,
-    stride = xx size_of(Test_Render.Vertex),
-    inputRate = .VERTEX,
-};
-
-// Vertex input attributes - describes each attribute in the buffer
-vertex_attributes: []VkVertexInputAttributeDescription = .[
-    .{ location = 0, binding = 0, format = .R32G32B32_SFLOAT, offset = 0 },           // position
-    .{ location = 1, binding = 0, format = .R32G32B32_SFLOAT, offset = 12 },        // color
-];
+Shader_Globals :: struct {
+    view: Mat4;
+    proj: Mat4;
+    time: float32;
+    resolution: Vec2;
+}
 
 create_pipeline :: () {
     shader_module := create_shader_module("test");
@@ -40,6 +34,17 @@ create_pipeline :: () {
     dyn_state_info: VkPipelineDynamicStateCreateInfo = .{};
     dyn_state_info.dynamicStateCount = dynamic_states.count;
     dyn_state_info.pDynamicStates = dynamic_states.data;
+
+    vertex_binding: VkVertexInputBindingDescription = .{
+        binding = 0,
+        stride = 24,
+        inputRate = .VERTEX,
+    };
+
+    vertex_attributes: []VkVertexInputAttributeDescription = .[
+        .{ location = 0, binding = 0, format = .R32G32B32_SFLOAT, offset = 0 },
+        .{ location = 1, binding = 0, format = .R32G32B32_SFLOAT, offset = 12 },
+    ];
 
     vertex_info: VkPipelineVertexInputStateCreateInfo = .{
         vertexBindingDescriptionCount = 1,
@@ -77,7 +82,16 @@ create_pipeline :: () {
         pAttachments = *color_blend_attachment
     };
     
-    layout_info: VkPipelineLayoutCreateInfo = .{};
+    push_constant_range: VkPushConstantRange = .{
+        stageFlags = .VERTEX_BIT | .FRAGMENT_BIT,
+        offset = 0,
+        size = xx (size_of(Mat4) + 4),
+    };
+
+    layout_info: VkPipelineLayoutCreateInfo = .{
+        pushConstantRangeCount = 1,
+        pPushConstantRanges = *push_constant_range,
+    };
     vkCreatePipelineLayout(render_app.device, *layout_info, null, *render_app.pipeline_data.pipeline_layout);
     
     color_format := render_app.swapchain_data.surfaceFormat.format;

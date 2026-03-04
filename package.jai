@@ -48,6 +48,15 @@ Jay_Render :: struct {
                     if ev.key.key == SDLK_ESCAPE
                         engine.is_running = false;
 
+                case xx SDL_EventType.MOUSE_WHEEL;
+                    wheel := cast(float32) ev.wheel.y;
+                    if ev.wheel.direction == SDL_MouseWheelDirection.FLIPPED {
+                        wheel = -wheel;
+                    }
+                    if wheel != 0 {
+                        Test_Render.camera_zoom(wheel);
+                    }
+
                 case xx SDL_EventType.WINDOW_RESIZED;
                     // Ignore the initial configure event from Wayland — the
                     // swapchain was just created with the correct extent.
@@ -67,6 +76,7 @@ Jay_Render :: struct {
     }
 
     after_tick :: (engine: *Engine) {
+        Test_Render.set_time_seconds(cast(float32) engine.timer.time);
         success := Test_Render.draw_frame();
         render_app.frames_rendered += 1;
         if !success && !render_app.framebuffer_resized {
@@ -128,4 +138,3 @@ Queue_Set :: struct {
 }
 
 render_app := Render_App.{};
-
