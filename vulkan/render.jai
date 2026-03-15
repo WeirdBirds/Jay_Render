@@ -14,9 +14,8 @@ create_render :: () {
     }
 
     // Present-wait semaphores indexed per swapchain image, not per frame-in-flight.
-    for 0..render_app.swapchain_data.swapchainImageCount - 1 {
+    for 0..render_app.swapchain_data.swapchainImageCount - 1
         vkCreateSemaphore(render_app.device, *semaphore_info, null, *render_app.render_data.image_finished_semaphores[it]);
-    }
 }
 
 destroy_render :: () {
@@ -27,9 +26,8 @@ destroy_render :: () {
         vkDestroySemaphore(render_app.device, render_app.render_data.image_available_semaphores[it], null);
     }
 
-    for 0..render_app.swapchain_data.swapchainImageCount - 1 {
+    for 0..render_app.swapchain_data.swapchainImageCount - 1
         vkDestroySemaphore(render_app.device, render_app.render_data.image_finished_semaphores[it], null);
-    }
 
     vkDestroyCommandPool(render_app.device, render_app.cmd_pools.graphics, null);
     vkDestroyCommandPool(render_app.device, render_app.cmd_pools.transfer, null);
@@ -45,9 +43,8 @@ recreate_sync_objects :: () {
         vkDestroySemaphore(render_app.device, render_app.render_data.image_available_semaphores[it], null);
     }
 
-    for 0..render_app.swapchain_data.swapchainImageCount - 1 {
+    for 0..render_app.swapchain_data.swapchainImageCount - 1
         vkDestroySemaphore(render_app.device, render_app.render_data.image_finished_semaphores[it], null);
-    }
 
     // Create fresh
     semaphore_info: VkSemaphoreCreateInfo = .{};
@@ -59,15 +56,11 @@ recreate_sync_objects :: () {
         vkCreateFence(render_app.device, *fence_info, null, *render_app.render_data.frame_fences[it]);
     }
 
-    for 0..render_app.swapchain_data.swapchainImageCount - 1 {
+    for 0..render_app.swapchain_data.swapchainImageCount - 1
         vkCreateSemaphore(render_app.device, *semaphore_info, null, *render_app.render_data.image_finished_semaphores[it]);
-    }
 }
 
-make_cmd_data :: (
-        pool: *VkCommandPool,
-        buffers: []VkCommandBuffer,
-        q_index: s64) {
+make_cmd_data :: (pool: *VkCommandPool, buffers: []VkCommandBuffer, q_index: s64) {
     command_pool_info: VkCommandPoolCreateInfo = .{};
     command_pool_info.flags = .RESET_COMMAND_BUFFER_BIT;
     command_pool_info.queueFamilyIndex = xx q_index;
@@ -83,27 +76,27 @@ make_cmd_data :: (
 Render_Data :: struct {
     frame_index := 0;
     // Fences and acquire semaphores are indexed by frame-in-flight index.
-    frame_fences: [FRAME_COUNT]VkFence;
+    frame_fences:               [FRAME_COUNT]VkFence;
     image_available_semaphores: [FRAME_COUNT]VkSemaphore;
     // Submit/present semaphores are indexed by swapchain image index.
     // This prevents reusing a semaphore that the presentation engine still holds.
     // See: https://docs.vulkan.org/guide/latest/swapchain_semaphore_reuse.html
-    image_finished_semaphores: [MAX_SWAPCHAIN_IMAGES]VkSemaphore;
+    image_finished_semaphores:  [MAX_SWAPCHAIN_IMAGES]VkSemaphore;
 }
 
 Command_Pool_Set :: struct {
     graphics: VkCommandPool;
     transfer: VkCommandPool;
-    compute: VkCommandPool;
+    compute:  VkCommandPool;
 }
 
 Command_Buffer_Set :: struct {
     graphics: [FRAME_COUNT]VkCommandBuffer;
     transfer: [FRAME_COUNT]VkCommandBuffer;
-    compute: [FRAME_COUNT]VkCommandBuffer;
+    compute:  [FRAME_COUNT]VkCommandBuffer;
 }
 
 // Public for engine modules
 
-FRAME_COUNT          :: 3;
+FRAME_COUNT :: 3;
 MAX_SWAPCHAIN_IMAGES :: 3;

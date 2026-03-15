@@ -8,5 +8,7 @@
 #load "package.jai";
 #load "vulkan.jai";
 
+#load "common/image.jai";
+
 DEBUG :: true;
 LINUX_RENDERDOC :: false;

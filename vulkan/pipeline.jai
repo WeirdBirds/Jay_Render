@@ -11,7 +11,8 @@ Shader_Globals :: struct {
 }
 
 create_pipeline :: () {
-    shader_module := create_shader_module("test");
+    shader_path: string = "/shaders/test.slang";
+    shader_module := create_shader_module(Name.from_path(shader_path));
 
     shader_stages: []VkPipelineShaderStageCreateInfo = .[    
         .{ 
@@ -73,6 +74,14 @@ create_pipeline :: () {
         rasterizationSamples = ._1_BIT,   
     };
 
+    depth_stencil_state: VkPipelineDepthStencilStateCreateInfo = .{
+        depthTestEnable = VK_TRUE,
+        depthWriteEnable = VK_TRUE,
+        depthCompareOp = .LESS,
+        depthBoundsTestEnable = VK_FALSE,
+        stencilTestEnable = VK_FALSE,
+    };
+
     color_blend_attachment: VkPipelineColorBlendAttachmentState = .{
         colorWriteMask = .R_BIT | .G_BIT | .B_BIT | .A_BIT
     };
@@ -82,22 +91,17 @@ create_pipeline :: () {
         pAttachments = *color_blend_attachment
     };
     
-    push_constant_range: VkPushConstantRange = .{
-        stageFlags = .VERTEX_BIT | .FRAGMENT_BIT,
-        offset = 0,
-        size = xx (size_of(Mat4) + 4),
-    };
-
     layout_info: VkPipelineLayoutCreateInfo = .{
-        pushConstantRangeCount = 1,
-        pPushConstantRanges = *push_constant_range,
+        setLayoutCount = 1,
+        pSetLayouts = *render_app.descriptor_data.set_layout,
     };
     vkCreatePipelineLayout(render_app.device, *layout_info, null, *render_app.pipeline_data.pipeline_layout);
     
     color_format := render_app.swapchain_data.surfaceFormat.format;
     pipeline_rendering: VkPipelineRenderingCreateInfo = .{
         colorAttachmentCount = 1,
-        pColorAttachmentFormats = *color_format
+        pColorAttachmentFormats = *color_format,
+        depthAttachmentFormat = render_app.depth_data.format,
     };
 
     pipeline_info: VkGraphicsPipelineCreateInfo = .{
@@ -109,6 +113,7 @@ create_pipeline :: () {
         pViewportState = *viewport_state,
         pRasterizationState = *rasterization_state,
         pMultisampleState = *multisample_state,
+        pDepthStencilState = *depth_stencil_state,
         pColorBlendState = *color_blend_state,
         pDynamicState = *dyn_state_info,
         layout = render_app.pipeline_data.pipeline_layout,

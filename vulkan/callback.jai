@@ -47,22 +47,16 @@ debug_callback :: (flags: VkDebugReportFlagsEXT, objType: VkDebugReportObjectTyp
             case VkDebugReportObjectTypeEXT.COMMAND_POOL_EXT;                   object = "CommandPool";
             case VkDebugReportObjectTypeEXT.SURFACE_KHR_EXT;                    object = "SurfaceKHR";
             case VkDebugReportObjectTypeEXT.SWAPCHAIN_KHR_EXT;                  object = "SwapchainKHR";
-
             // Aliases (same numeric value) grouped together:
-            case VkDebugReportObjectTypeEXT.DEBUG_REPORT_CALLBACK_EXT_EXT; object = "DebugReportCallback";
-
+            case VkDebugReportObjectTypeEXT.DEBUG_REPORT_CALLBACK_EXT_EXT;      object = "DebugReportCallback";
             case VkDebugReportObjectTypeEXT.DISPLAY_KHR_EXT;                    object = "Display";
             case VkDebugReportObjectTypeEXT.DISPLAY_MODE_KHR_EXT;               object = "DisplayMode";
-
             // Aliases (same numeric value) grouped together:
-            case VkDebugReportObjectTypeEXT.VALIDATION_CACHE_EXT_EXT; object = "ValidationCache";
-
+            case VkDebugReportObjectTypeEXT.VALIDATION_CACHE_EXT_EXT;           object = "ValidationCache";
             // Aliases (same numeric value) grouped together:
-            case VkDebugReportObjectTypeEXT.SAMPLER_YCBCR_CONVERSION_EXT; object = "SamplerYcbcrConversion";
-
+            case VkDebugReportObjectTypeEXT.SAMPLER_YCBCR_CONVERSION_EXT;       object = "SamplerYcbcrConversion";
             // Aliases (same numeric value) grouped together:
-            case VkDebugReportObjectTypeEXT.DESCRIPTOR_UPDATE_TEMPLATE_EXT; object = "DescriptorUpdateTemplate";
-
+            case VkDebugReportObjectTypeEXT.DESCRIPTOR_UPDATE_TEMPLATE_EXT;     object = "DescriptorUpdateTemplate";
             case VkDebugReportObjectTypeEXT.CU_MODULE_NVX_EXT;                  object = "CUModuleNVX";
             case VkDebugReportObjectTypeEXT.CU_FUNCTION_NVX_EXT;                object = "CUFunctionNVX";
             case VkDebugReportObjectTypeEXT.ACCELERATION_STRUCTURE_KHR_EXT;     object = "AccelerationStructureKHR";

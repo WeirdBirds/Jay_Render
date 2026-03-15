@@ -117,9 +117,12 @@ Render_App :: struct {
     q_indices: Queue_Indices;
     queues: Queue_Set = .{};
     swapchain_data: Swapchain_Data;
+    depth_data: Depth_Data;
     render_data: Render_Data;
     cmd_pools: Command_Pool_Set;
     cmd_buffers: Command_Buffer_Set;
+    
+    descriptor_data: Descriptor_Data;
     
     pipeline_data: Pipeline_Data;
     vertex_buffer: GPU_Buffer;

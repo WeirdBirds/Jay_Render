@@ -2,17 +2,15 @@ GPU_Buffer :: struct {
     buffer: VkBuffer;
     memory: VkDeviceMemory;
     size: s64;
-};
+}
 
 find_memory_type :: (type_filter: u32, properties: VkMemoryPropertyFlags) -> u32 {
     mem_props: VkPhysicalDeviceMemoryProperties;
     vkGetPhysicalDeviceMemoryProperties(render_app.physical_device, *mem_props);
 
-    for i: 0..mem_props.memoryTypeCount-1 {
-        if (type_filter & (1 << i)) != 0 && (mem_props.memoryTypes[i].propertyFlags & properties) == properties {
+    for i: 0..mem_props.memoryTypeCount - 1
+        if (type_filter & (1 << i)) != 0 && (mem_props.memoryTypes[i].propertyFlags & properties) == properties
             return i;
-        }
-    }
 
     assert(false, "Failed to find suitable memory type (filter: %, properties: %)", type_filter, properties);
     return 0;
@@ -23,10 +21,9 @@ create_buffer :: (size: s64, usage: VkBufferUsageFlags, properties: VkMemoryProp
     result.size = size;
 
     buffer_info: VkBufferCreateInfo = .{
-        size = xx size,
-        usage = usage,
-        sharingMode = .EXCLUSIVE,
-    };
+                                         size = xx size,
+                                         usage = usage,
+                                         sharingMode = .EXCLUSIVE };
 
     vkCreateBuffer(render_app.device, *buffer_info, null, *result.buffer);
 
@@ -34,13 +31,12 @@ create_buffer :: (size: s64, usage: VkBufferUsageFlags, properties: VkMemoryProp
     vkGetBufferMemoryRequirements(render_app.device, result.buffer, *mem_requirements);
 
     alloc_info: VkMemoryAllocateInfo = .{
-        allocationSize = xx mem_requirements.size,
-        memoryTypeIndex = find_memory_type(mem_requirements.memoryTypeBits, properties)
-    };
+                                          allocationSize = xx mem_requirements.size,
+                                          memoryTypeIndex = find_memory_type(mem_requirements.memoryTypeBits, properties) };
 
     vkAllocateMemory(render_app.device, *alloc_info, null, *result.memory);
     vkBindBufferMemory(render_app.device, result.buffer, result.memory, 0);
-    
+
     return result;
 }
 
@@ -71,9 +67,9 @@ upload_buffer_data_async :: (dst: *GPU_Buffer, data: *void, size: s64) -> GPU_Bu
     vkEndCommandBuffer(cmd);
 
     submit_info: VkSubmitInfo = .{
-        commandBufferCount = 1,
-        pCommandBuffers    = *cmd,
-    };
+                                   commandBufferCount = 1,
+                                   pCommandBuffers = *cmd };
+
     vkQueueSubmit(render_app.queues.transfer, 1, *submit_info, VK_NULL_HANDLE);
 
     // NOTE: Caller is responsible for:
@@ -103,17 +99,18 @@ upload_buffer_data_sync :: (dst: *GPU_Buffer, data: *void, size: s64) {
     vkEndCommandBuffer(cmd);
 
     submit_info: VkSubmitInfo = .{
-        commandBufferCount = 1,
-        pCommandBuffers    = *cmd,
-    };
+                                   commandBufferCount = 1,
+                                   pCommandBuffers = *cmd };
+
     vkQueueSubmit(render_app.queues.transfer, 1, *submit_info, VK_NULL_HANDLE);
-    
+
     // Wait for GPU to finish
     vkQueueWaitIdle(render_app.queues.transfer);
-    
+
     // Now safe to reset and clean up
     vkResetCommandBuffer(cmd, 0);
     destroy_buffer(*staging);
-    
-    #if DEBUG log("% bytes uploaded to GPU", size);
+
+    #if DEBUG
+        log("% bytes uploaded to GPU", size);
 }
