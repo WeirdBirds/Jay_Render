@@ -87,15 +87,28 @@ create_device :: () {
     vulkan13_features.dynamicRendering = VK_TRUE;
     vulkan13_features.synchronization2 = VK_TRUE;
 
+    // Enable Vulkan 1.2 features (descriptor indexing for bindless textures)
+    vulkan12_features: VkPhysicalDeviceVulkan12Features;
+    vulkan12_features.pNext                                       = *vulkan13_features;
+    vulkan12_features.runtimeDescriptorArray                      = VK_TRUE;
+    vulkan12_features.descriptorBindingPartiallyBound              = VK_TRUE;
+    vulkan12_features.descriptorBindingVariableDescriptorCount     = VK_TRUE;
+    vulkan12_features.shaderSampledImageArrayNonUniformIndexing    = VK_TRUE;
+    vulkan12_features.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+
+    // Enable base Vulkan 1.0 features
+    device_features: VkPhysicalDeviceFeatures;
+    device_features.samplerAnisotropy = VK_TRUE;
+
     device_info: VkDeviceCreateInfo = .{};
-    device_info.pNext = *vulkan13_features;
+    device_info.pNext = *vulkan12_features;
     device_info.queueCreateInfoCount = queue_infos.count;
     device_info.pQueueCreateInfos = queue_infos.data;
     device_info.enabledLayerCount = 0;
     device_info.ppEnabledLayerNames = null;
     device_info.enabledExtensionCount = extensions.count;
     device_info.ppEnabledExtensionNames = extensions.data;
-    device_info.pEnabledFeatures = null;
+    device_info.pEnabledFeatures = *device_features;
 
     result := vkCreateDevice(render_app.physical_device, *device_info, null, *render_app.device);
 

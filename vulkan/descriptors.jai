@@ -6,13 +6,15 @@ Global_Uniforms :: struct {
 }
 
 Object_Data :: struct {
-    model: Mat4;
+    model:         Mat4 #align 16;
+    texture_index: u32 #align 16;
 }
 
-MAX_OBJECTS_PER_FRAME :: 1024;
+MAX_OBJECTS_PER_FRAME :: 1;
+MAX_TEXTURES          :: 4096;
 
 Descriptor_Data :: struct {
-    set_layout:         VkDescriptorSetLayout;        // shape of set 0
+    set_layout:         VkDescriptorSetLayout;        // shape of set 0 (scene)
     pool:               VkDescriptorPool;             // allocator for descriptor sets
     sets:               [FRAME_COUNT]VkDescriptorSet; // one set per frame-in-flight
     global_ubos:        [FRAME_COUNT]GPU_Buffer;      // per-frame uniform buffers
@@ -21,12 +23,15 @@ Descriptor_Data :: struct {
     object_ssbo_mapped: [FRAME_COUNT]*void;           // persistently mapped pointers
     indirect_buffer:    GPU_Buffer;                   // indirect draw command buffer
     indirect_mapped:    *void;                        // persistently mapped pointer
+
+    // Post-process descriptor set (set 1): scene color + sampled depth
+    post_set_layout:    VkDescriptorSetLayout;
+    post_set:           VkDescriptorSet;
 }
 
 create_descriptors :: () {
     // --- Descriptor set layout ---
-    bindings: [2]VkDescriptorSetLayoutBinding;
-
+    bindings: [3]VkDescriptorSetLayoutBinding;
 
     // Binding 0: Global uniforms (UBO)
     bindings[0] = .{
@@ -43,19 +48,74 @@ create_descriptors :: () {
         descriptorCount = 1,
         stageFlags      = .VERTEX_BIT
     };
+
+    // Binding 2: Bindless texture array (combined image sampler)
+    bindings[2] = .{
+        binding         = 2,
+        descriptorType  = .COMBINED_IMAGE_SAMPLER,
+        descriptorCount = MAX_TEXTURES,
+        stageFlags      = .FRAGMENT_BIT
+    };
+
+    // Per-binding flags: only binding 2 needs the bindless flags
+    binding_flags: [3]VkDescriptorBindingFlags = .[
+        0, // binding 0: UBO — no special flags
+        0, // binding 1: SSBO — no special flags
+        .PARTIALLY_BOUND_BIT | .UPDATE_AFTER_BIND_BIT | .VARIABLE_DESCRIPTOR_COUNT_BIT,
+    ];
+
+    flags_info: VkDescriptorSetLayoutBindingFlagsCreateInfo = .{
+        bindingCount  = binding_flags.count,
+        pBindingFlags = binding_flags.data,
+    };
+
     layout_info: VkDescriptorSetLayoutCreateInfo = .{
+        pNext        = *flags_info,
+        flags        = .UPDATE_AFTER_BIND_POOL_BIT,
         bindingCount = bindings.count,
         pBindings    = bindings.data
     };
     vkCreateDescriptorSetLayout(render_app.device, *layout_info, null, *render_app.descriptor_data.set_layout);
 
-    // --- Descriptor pool ---
-    pool_sizes: [2]VkDescriptorPoolSize    = .[
-        .{type = .UNIFORM_BUFFER, descriptorCount = FRAME_COUNT},
-        .{type = .STORAGE_BUFFER, descriptorCount = FRAME_COUNT
-        } ];
-    pool_info:  VkDescriptorPoolCreateInfo = .{
-        maxSets       = FRAME_COUNT,
+    // --- Post-process descriptor set layout (set 1) ---
+    post_bindings: [3]VkDescriptorSetLayoutBinding = .[
+        .{  // binding 0: scene color (combined image sampler)
+            binding         = 0,
+            descriptorType  = .COMBINED_IMAGE_SAMPLER,
+            descriptorCount = 1,
+            stageFlags      = .FRAGMENT_BIT,
+        },
+        .{  // binding 1: depth texture (sampled image only, no sampler)
+            binding         = 1,
+            descriptorType  = .SAMPLED_IMAGE,
+            descriptorCount = 1,
+            stageFlags      = .FRAGMENT_BIT,
+        },
+        .{  // binding 2: depth sampler (separate sampler for depth reads)
+            binding         = 2,
+            descriptorType  = .SAMPLER,
+            descriptorCount = 1,
+            stageFlags      = .FRAGMENT_BIT,
+        },
+    ];
+
+    post_layout_info: VkDescriptorSetLayoutCreateInfo = .{
+        bindingCount = post_bindings.count,
+        pBindings    = post_bindings.data,
+    };
+    vkCreateDescriptorSetLayout(render_app.device, *post_layout_info, null, *render_app.descriptor_data.post_set_layout);
+
+    // --- Descriptor pool (scene sets + 1 post-process set) ---
+    pool_sizes: [5]VkDescriptorPoolSize = .[
+        .{type = .UNIFORM_BUFFER,         descriptorCount = FRAME_COUNT},
+        .{type = .STORAGE_BUFFER,         descriptorCount = FRAME_COUNT},
+        .{type = .COMBINED_IMAGE_SAMPLER, descriptorCount = MAX_TEXTURES * FRAME_COUNT + 1},
+        .{type = .SAMPLED_IMAGE,          descriptorCount = 1},
+        .{type = .SAMPLER,                descriptorCount = 1},
+    ];
+    pool_info: VkDescriptorPoolCreateInfo = .{
+        flags         = .UPDATE_AFTER_BIND_BIT,
+        maxSets       = FRAME_COUNT + 1,
         poolSizeCount = pool_sizes.count,
         pPoolSizes    = pool_sizes.data
     };
@@ -64,16 +124,34 @@ create_descriptors :: () {
 
     // --- Allocate descriptor sets ---
     layouts: [FRAME_COUNT]VkDescriptorSetLayout;
-
     for 0..FRAME_COUNT - 1
         layouts[it] = render_app.descriptor_data.set_layout;
 
+    // Variable descriptor count: binding 2 gets MAX_TEXTURES slots per set
+    variable_counts: [FRAME_COUNT]u32;
+    for 0..FRAME_COUNT - 1
+        variable_counts[it] = MAX_TEXTURES;
+
+    variable_count_info: VkDescriptorSetVariableDescriptorCountAllocateInfo = .{
+        descriptorSetCount = FRAME_COUNT,
+        pDescriptorCounts  = variable_counts.data,
+    };
+
     alloc_info: VkDescriptorSetAllocateInfo = .{
+        pNext              = *variable_count_info,
         descriptorPool     = render_app.descriptor_data.pool,
         descriptorSetCount = FRAME_COUNT,
         pSetLayouts        = layouts.data
     };
     vkAllocateDescriptorSets(render_app.device, *alloc_info, render_app.descriptor_data.sets.data);
+
+    // --- Allocate post-process descriptor set ---
+    post_alloc_info: VkDescriptorSetAllocateInfo = .{
+        descriptorPool     = render_app.descriptor_data.pool,
+        descriptorSetCount = 1,
+        pSetLayouts        = *render_app.descriptor_data.post_set_layout,
+    };
+    vkAllocateDescriptorSets(render_app.device, *post_alloc_info, *render_app.descriptor_data.post_set);
 
     // --- 4. Create and map buffers ---
     for 0..FRAME_COUNT - 1 {
@@ -110,7 +188,7 @@ create_descriptors :: () {
 
     // --- Write descriptor sets (point bindings at buffers) ---
     for 0..FRAME_COUNT - 1 {
-        ubo_info:  VkDescriptorBufferInfo = .{
+        ubo_info: VkDescriptorBufferInfo = .{
             buffer = render_app.descriptor_data.global_ubos[it].buffer,
             offset = 0,
             range  = xx size_of(Global_Uniforms)
@@ -174,7 +252,9 @@ destroy_descriptors :: () {
     // Pool owns allocated sets; destroying pool invalidates/frees them
     vkDestroyDescriptorPool(render_app.device, render_app.descriptor_data.pool, null);
     vkDestroyDescriptorSetLayout(render_app.device, render_app.descriptor_data.set_layout, null);
+    vkDestroyDescriptorSetLayout(render_app.device, render_app.descriptor_data.post_set_layout, null);
 
-    render_app.descriptor_data.pool       = VK_NULL_HANDLE;
-    render_app.descriptor_data.set_layout = VK_NULL_HANDLE;
+    render_app.descriptor_data.pool            = VK_NULL_HANDLE;
+    render_app.descriptor_data.set_layout      = VK_NULL_HANDLE;
+    render_app.descriptor_data.post_set_layout = VK_NULL_HANDLE;
 }

@@ -5,7 +5,7 @@ create_render :: () {
     make_cmd_data(*render_app.cmd_pools.compute, render_app.cmd_buffers.compute, render_app.q_indices.compute);
 
     semaphore_info: VkSemaphoreCreateInfo = .{};
-    fence_info: VkFenceCreateInfo = .{};
+    fence_info:     VkFenceCreateInfo     = .{};
     fence_info.flags = .SIGNALED_BIT;
 
     for 0..FRAME_COUNT - 1 {
@@ -16,10 +16,24 @@ create_render :: () {
     // Present-wait semaphores indexed per swapchain image, not per frame-in-flight.
     for 0..render_app.swapchain_data.swapchainImageCount - 1
         vkCreateSemaphore(render_app.device, *semaphore_info, null, *render_app.render_data.image_finished_semaphores[it]);
+
+    create_postprocess();
+    render_app.sampler = create_sampler(.NEAREST, anisotropy = true, max_lod = 16.0);
 }
 
 destroy_render :: () {
     vkDeviceWaitIdle(render_app.device);
+
+    destroy_postprocess();
+
+    if render_app.sampler
+        vkDestroySampler(render_app.device, render_app.sampler, null);
+    render_app.sampler = VK_NULL_HANDLE;
+
+    // Destroy loaded textures
+    for 0..cast(s64) render_app.texture_count - 1
+        destroy_texture(*render_app.textures[it]);
+
 
     for 0..FRAME_COUNT - 1 {
         vkDestroyFence(render_app.device, render_app.render_data.frame_fences[it], null);
@@ -48,7 +62,7 @@ recreate_sync_objects :: () {
 
     // Create fresh
     semaphore_info: VkSemaphoreCreateInfo = .{};
-    fence_info: VkFenceCreateInfo = .{};
+    fence_info:     VkFenceCreateInfo     = .{};
     fence_info.flags = .SIGNALED_BIT;
 
     for 0..FRAME_COUNT - 1 {
@@ -60,15 +74,29 @@ recreate_sync_objects :: () {
         vkCreateSemaphore(render_app.device, *semaphore_info, null, *render_app.render_data.image_finished_semaphores[it]);
 }
 
+create_postprocess :: () {
+    render_app.post_sampler = create_sampler(.NEAREST, .CLAMP_TO_EDGE);
+    create_post_framebuffer();
+}
+
+destroy_postprocess :: () {
+    destroy_texture(*render_app.post_framebuffer);
+
+    if render_app.post_sampler != VK_NULL_HANDLE
+        vkDestroySampler(render_app.device, render_app.post_sampler, null);
+
+    render_app.post_sampler = VK_NULL_HANDLE;
+}
+
 make_cmd_data :: (pool: *VkCommandPool, buffers: []VkCommandBuffer, q_index: s64) {
     command_pool_info: VkCommandPoolCreateInfo = .{};
-    command_pool_info.flags = .RESET_COMMAND_BUFFER_BIT;
+    command_pool_info.flags            = .RESET_COMMAND_BUFFER_BIT;
     command_pool_info.queueFamilyIndex = xx q_index;
     vkCreateCommandPool(render_app.device, *command_pool_info, null, pool);
 
     command_buffer_info: VkCommandBufferAllocateInfo = .{};
-    command_buffer_info.commandPool = pool.*;
-    command_buffer_info.level = .PRIMARY;
+    command_buffer_info.commandPool        = pool.*;
+    command_buffer_info.level              = .PRIMARY;
     command_buffer_info.commandBufferCount = FRAME_COUNT;
     vkAllocateCommandBuffers(render_app.device, *command_buffer_info, buffers.data);
 }

@@ -11,6 +11,7 @@
 #load "vulkan/descriptors.jai";
 #load "vulkan/pipeline.jai";
 #load "vulkan/texture.jai";
+#load "vulkan/mesh.jai";
 
 init_vulkan :: () {
     load_global_proc_addresses();

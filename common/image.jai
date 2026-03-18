@@ -1,9 +1,4 @@
-Pixel :: struct {
-    r: u8;
-    g: u8;
-    b: u8;
-    a: u8;
-}
+Pixel :: Vector(4, u8, .["r", "g", "b", "a"]);
 
 Image_Data :: struct {
     pixels:   []Pixel;

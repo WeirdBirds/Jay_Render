@@ -1,7 +1,7 @@
 GPU_Buffer :: struct {
     buffer: VkBuffer;
     memory: VkDeviceMemory;
-    size: s64;
+    size:   s64;
 }
 
 find_memory_type :: (type_filter: u32, properties: VkMemoryPropertyFlags) -> u32 {
@@ -20,19 +20,21 @@ create_buffer :: (size: s64, usage: VkBufferUsageFlags, properties: VkMemoryProp
     result: GPU_Buffer;
     result.size = size;
 
-    buffer_info: VkBufferCreateInfo = .{
-                                         size = xx size,
-                                         usage = usage,
-                                         sharingMode = .EXCLUSIVE };
 
+    buffer_info: VkBufferCreateInfo = .{
+        size        = xx size,
+        usage       = usage,
+        sharingMode = .EXCLUSIVE
+    };
     vkCreateBuffer(render_app.device, *buffer_info, null, *result.buffer);
 
     mem_requirements: VkMemoryRequirements;
     vkGetBufferMemoryRequirements(render_app.device, result.buffer, *mem_requirements);
 
     alloc_info: VkMemoryAllocateInfo = .{
-                                          allocationSize = xx mem_requirements.size,
-                                          memoryTypeIndex = find_memory_type(mem_requirements.memoryTypeBits, properties) };
+        allocationSize  = xx mem_requirements.size,
+        memoryTypeIndex = find_memory_type(mem_requirements.memoryTypeBits, properties)
+    };
 
     vkAllocateMemory(render_app.device, *alloc_info, null, *result.memory);
     vkBindBufferMemory(render_app.device, result.buffer, result.memory, 0);
@@ -67,8 +69,9 @@ upload_buffer_data_async :: (dst: *GPU_Buffer, data: *void, size: s64) -> GPU_Bu
     vkEndCommandBuffer(cmd);
 
     submit_info: VkSubmitInfo = .{
-                                   commandBufferCount = 1,
-                                   pCommandBuffers = *cmd };
+        commandBufferCount = 1,
+        pCommandBuffers    = *cmd
+    };
 
     vkQueueSubmit(render_app.queues.transfer, 1, *submit_info, VK_NULL_HANDLE);
 
@@ -99,8 +102,9 @@ upload_buffer_data_sync :: (dst: *GPU_Buffer, data: *void, size: s64) {
     vkEndCommandBuffer(cmd);
 
     submit_info: VkSubmitInfo = .{
-                                   commandBufferCount = 1,
-                                   pCommandBuffers = *cmd };
+        commandBufferCount = 1,
+        pCommandBuffers    = *cmd
+    };
 
     vkQueueSubmit(render_app.queues.transfer, 1, *submit_info, VK_NULL_HANDLE);
 

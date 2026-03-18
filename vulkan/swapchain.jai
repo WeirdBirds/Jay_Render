@@ -1,10 +1,10 @@
 Swapchain_Data :: struct {
-    swapchain: VkSwapchainKHR;
+    swapchain:           VkSwapchainKHR;
     swapchainImageCount: u32;
-    swapchainImages: [MAX_SWAPCHAIN_IMAGES]VkImage;
-    imageViews: [MAX_SWAPCHAIN_IMAGES]VkImageView;
-    swapchainExtent: VkExtent2D;
-    surfaceFormat: VkSurfaceFormatKHR;
+    swapchainImages:     [MAX_SWAPCHAIN_IMAGES]VkImage;
+    imageViews:          [MAX_SWAPCHAIN_IMAGES]VkImageView;
+    swapchainExtent:     VkExtent2D;
+    surfaceFormat:       VkSurfaceFormatKHR;
 }
 
 create_swapchain :: (old_swapchain: VkSwapchainKHR = VK_NULL_HANDLE) {
@@ -37,25 +37,25 @@ create_swapchain :: (old_swapchain: VkSwapchainKHR = VK_NULL_HANDLE) {
 
     render_app.swapchain_data.swapchainExtent = surfaceCapabilities.currentExtent;
     if render_app.swapchain_data.swapchainExtent.width == U32_MAX {
-        render_app.swapchain_data.swapchainExtent.width = clamp(render_app.frame_size.width, surfaceCapabilities.minImageExtent.width, surfaceCapabilities.maxImageExtent.width);
+        render_app.swapchain_data.swapchainExtent.width  = clamp(render_app.frame_size.width, surfaceCapabilities.minImageExtent.width, surfaceCapabilities.maxImageExtent.width);
         render_app.swapchain_data.swapchainExtent.height = clamp(render_app.frame_size.height, surfaceCapabilities.minImageExtent.height, surfaceCapabilities.maxImageExtent.height);
     }
 
     swapchain_info: VkSwapchainCreateInfoKHR;
-    swapchain_info.surface = render_app.surface;
-    swapchain_info.minImageCount = render_app.swapchain_data.swapchainImageCount;
-    swapchain_info.imageFormat = render_app.swapchain_data.surfaceFormat.format;
-    swapchain_info.imageColorSpace = render_app.swapchain_data.surfaceFormat.colorSpace;
-    swapchain_info.imageExtent = render_app.swapchain_data.swapchainExtent;
+    swapchain_info.surface          = render_app.surface;
+    swapchain_info.minImageCount    = render_app.swapchain_data.swapchainImageCount;
+    swapchain_info.imageFormat      = render_app.swapchain_data.surfaceFormat.format;
+    swapchain_info.imageColorSpace  = render_app.swapchain_data.surfaceFormat.colorSpace;
+    swapchain_info.imageExtent      = render_app.swapchain_data.swapchainExtent;
     swapchain_info.imageArrayLayers = 1;
     swapchain_info.imageUsage |= .COLOR_ATTACHMENT_BIT;
     swapchain_info.imageUsage |= .TRANSFER_DST_BIT;
     swapchain_info.imageSharingMode = .EXCLUSIVE;
-    swapchain_info.preTransform = surfaceCapabilities.currentTransform;
-    swapchain_info.compositeAlpha = .OPAQUE_BIT_KHR;
-    swapchain_info.presentMode = presentMode;
-    swapchain_info.clipped = VK_TRUE;
-    swapchain_info.oldSwapchain = old_swapchain;
+    swapchain_info.preTransform     = surfaceCapabilities.currentTransform;
+    swapchain_info.compositeAlpha   = .OPAQUE_BIT_KHR;
+    swapchain_info.presentMode      = presentMode;
+    swapchain_info.clipped          = VK_TRUE;
+    swapchain_info.oldSwapchain     = old_swapchain;
 
     result := vkCreateSwapchainKHR(render_app.device, *swapchain_info, null, *render_app.swapchain_data.swapchain);
 
@@ -97,15 +97,17 @@ recreate_swapchain :: () {
         vkDestroyImageView(render_app.device, render_app.swapchain_data.imageViews[index], null);
 
     // Update frame size from the actual window
-    render_app.frame_size.width = xx w;
+    render_app.frame_size.width  = xx w;
     render_app.frame_size.height = xx h;
 
     // Create new swapchain, passing old handle so the driver can reuse resources
     create_swapchain(old_swapchain);
 
-    // Depth resources depend on swapchain extent and must be recreated.
+    // Depth and post-process framebuffer depend on swapchain extent and must be recreated.
+    destroy_texture(*render_app.post_framebuffer);
     destroy_depth();
     create_depth();
+    create_post_framebuffer();
 
     // Now destroy the old swapchain handle
     vkDestroySwapchainKHR(render_app.device, old_swapchain, null);
@@ -117,7 +119,7 @@ recreate_swapchain :: () {
     // Reset frame index so we start clean with fence[0]
     render_app.render_data.frame_index = 0;
 
-    render_app.framebuffer_resized = false;
+    render_app.framebuffer_resized     = false;
 
     log("Swapchain recreated: %x%", render_app.swapchain_data.swapchainExtent.width, render_app.swapchain_data.swapchainExtent.height);
 }
