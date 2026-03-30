@@ -272,7 +272,7 @@ register_texture_with_sampler :: (texture: *Texture, slot: u32, sampler: VkSampl
 
         write: VkWriteDescriptorSet = .{
             dstSet          = render_app.descriptor_data.sets[it],
-            dstBinding      = 2,
+            dstBinding      = 3,
             dstArrayElement = slot,
             descriptorType  = .COMBINED_IMAGE_SAMPLER,
             descriptorCount = 1,

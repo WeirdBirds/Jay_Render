@@ -109,6 +109,9 @@ recreate_swapchain :: () {
     create_depth();
     create_post_framebuffer();
 
+    destroy_pipeline();
+    create_pipeline();
+
     // Now destroy the old swapchain handle
     vkDestroySwapchainKHR(render_app.device, old_swapchain, null);
 

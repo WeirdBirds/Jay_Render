@@ -46,6 +46,16 @@ Jay_Render :: struct {
                 case xx SDL_EventType.KEY_DOWN;
                     if ev.key.key == SDLK_ESCAPE
                         engine.is_running = false;
+                    if ev.key.key == SDLK_W  camera.keys_held |= .FORWARD;
+                    if ev.key.key == SDLK_S  camera.keys_held |= .BACK;
+                    if ev.key.key == SDLK_A  camera.keys_held |= .LEFT;
+                    if ev.key.key == SDLK_D  camera.keys_held |= .RIGHT;
+
+                case xx SDL_EventType.KEY_UP;
+                    if ev.key.key == SDLK_W  camera.keys_held &= ~.FORWARD;
+                    if ev.key.key == SDLK_S  camera.keys_held &= ~.BACK;
+                    if ev.key.key == SDLK_A  camera.keys_held &= ~.LEFT;
+                    if ev.key.key == SDLK_D  camera.keys_held &= ~.RIGHT;
 
                 case xx SDL_EventType.MOUSE_WHEEL;
                     wheel := cast(float32) ev.wheel.y;
@@ -75,6 +85,10 @@ Jay_Render :: struct {
                 case; 
             } 
         }
+
+        // WASD movement: move orbit target along camera-relative directions.
+        if camera.keys_held
+            camera_orbit_wasd(*camera, cast(float32) engine.timer.delta_time);
 
         // Handle pending resize before drawing — recreate swapchain once,
         // then draw with the fresh swapchain.

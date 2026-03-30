@@ -1,8 +1,8 @@
 create_device :: () {
-    device_handles: [MAX_DEVICE_COUNT] VkPhysicalDevice;
+    device_handles:          [MAX_DEVICE_COUNT] VkPhysicalDevice;
     queue_family_properties: [MAX_QUEUE_COUNT] VkQueueFamilyProperties;
     
-    physical_device_count: u32;
+    physical_device_count:   u32;
 
     vkEnumeratePhysicalDevices(render_app.instance, *physical_device_count, null);
     physical_device_count = min(physical_device_count, MAX_DEVICE_COUNT);
@@ -50,8 +50,8 @@ create_device :: () {
     }
 
     //fallback to graphics
-    q_ids.transfer = ifx q_ids.transfer < 0 then q_ids.graphics else q_ids.transfer;
-    q_ids.compute =  ifx q_ids.compute  < 0 then q_ids.graphics else q_ids.compute;
+    q_ids.transfer       = ifx q_ids.transfer < 0 then q_ids.graphics else q_ids.transfer;
+    q_ids.compute        = ifx q_ids.compute  < 0 then q_ids.graphics else q_ids.compute;
 
     render_app.q_indices = q_ids;
 
@@ -59,17 +59,17 @@ create_device :: () {
 
     // GRAPHICS QUEUES
     queue_infos[0].queueFamilyIndex = xx q_ids.graphics;
-    queue_infos[0].queueCount = 1;
+    queue_infos[0].queueCount       = 1;
     queue_infos[0].pQueuePriorities = float.[1.0].data;
 
     // TRANSFER QUEUES
     queue_infos[1].queueFamilyIndex = xx q_ids.transfer;
-    queue_infos[1].queueCount = 1;
+    queue_infos[1].queueCount       = 1;
     queue_infos[1].pQueuePriorities = float.[1.0].data;
 
     // COMPUTE QUEUES
     queue_infos[2].queueFamilyIndex = xx q_ids.compute;
-    queue_infos[2].queueCount = 1;
+    queue_infos[2].queueCount       = 1;
     queue_infos[2].pQueuePriorities = float.[1.0].data;
 
     log("     GRAPHICS QUEUE: %", q_ids.graphics);
@@ -83,38 +83,39 @@ create_device :: () {
     extensions[1] = VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME;
 
     // Enable Vulkan 1.3 features (dynamic rendering, synchronization2)
-    vulkan13_features: VkPhysicalDeviceVulkan13Features;
+    vulkan13_features: VkPhysicalDeviceVulkan13Features = .{};
     vulkan13_features.dynamicRendering = VK_TRUE;
     vulkan13_features.synchronization2 = VK_TRUE;
 
     // Enable Vulkan 1.2 features (descriptor indexing for bindless textures)
-    vulkan12_features: VkPhysicalDeviceVulkan12Features;
-    vulkan12_features.pNext                                       = *vulkan13_features;
-    vulkan12_features.runtimeDescriptorArray                      = VK_TRUE;
+    vulkan12_features: VkPhysicalDeviceVulkan12Features = .{};
+    vulkan12_features.pNext                                        = *vulkan13_features;
+    vulkan12_features.runtimeDescriptorArray                       = VK_TRUE;
     vulkan12_features.descriptorBindingPartiallyBound              = VK_TRUE;
     vulkan12_features.descriptorBindingVariableDescriptorCount     = VK_TRUE;
     vulkan12_features.shaderSampledImageArrayNonUniformIndexing    = VK_TRUE;
     vulkan12_features.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
 
     // Enable base Vulkan 1.0 features
-    device_features: VkPhysicalDeviceFeatures;
+    device_features: VkPhysicalDeviceFeatures = .{};
     device_features.samplerAnisotropy = VK_TRUE;
+    device_features.fillModeNonSolid  = VK_TRUE;
+    device_features.multiDrawIndirect = VK_TRUE;
 
     device_info: VkDeviceCreateInfo = .{};
-    device_info.pNext = *vulkan12_features;
-    device_info.queueCreateInfoCount = queue_infos.count;
-    device_info.pQueueCreateInfos = queue_infos.data;
-    device_info.enabledLayerCount = 0;
-    device_info.ppEnabledLayerNames = null;
-    device_info.enabledExtensionCount = extensions.count;
+    device_info.pNext                   = *vulkan12_features;
+    device_info.queueCreateInfoCount    = queue_infos.count;
+    device_info.pQueueCreateInfos       = queue_infos.data;
+    device_info.enabledLayerCount       = 0;
+    device_info.ppEnabledLayerNames     = null;
+    device_info.enabledExtensionCount   = extensions.count;
     device_info.ppEnabledExtensionNames = extensions.data;
-    device_info.pEnabledFeatures = *device_features;
+    device_info.pEnabledFeatures        = *device_features;
 
     result := vkCreateDevice(render_app.physical_device, *device_info, null, *render_app.device);
 
-    if result != .SUCCESS {
+    if result != .SUCCESS
         log_error("Unable to create Vulkan device: %", result);
-    }
 
     vkGetDeviceQueue(render_app.device, xx q_ids.graphics, queueIndex=0, *render_app.queues.graphics);
     vkGetDeviceQueue(render_app.device, xx q_ids.transfer, queueIndex=0, *render_app.queues.transfer);
@@ -129,7 +130,7 @@ destroy_device :: () {
 
 get_suitable_device :: (device_handles: [] VkPhysicalDevice, count: u32) -> s64 {
     best_device_id: s64 = 0;
-    best_score: s64 = -1;
+    best_score:     s64 = -1;
     
     for i: 0..count-1 {
         props: VkPhysicalDeviceProperties;
@@ -141,12 +142,11 @@ get_suitable_device :: (device_handles: [] VkPhysicalDevice, count: u32) -> s64 
             score = 3;
         } else if props.deviceType == .INTEGRATED_GPU {
             score = 2;
-        } else if props.deviceType == .VIRTUAL_GPU {
+        } else if props.deviceType == .VIRTUAL_GPU
             score = 1;
-        }
         
         if score > best_score {
-            best_score = score;
+            best_score     = score;
             best_device_id = i;
         }
         

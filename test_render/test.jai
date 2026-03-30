@@ -1,9 +1,7 @@
 camera: Camera_Orbit = .{
     fov_radians = cast(float32)(60.0 * DEG_TO_RAD),
     near_plane  = cast(float32)0.1,
-    far_plane   = cast(float32)1000.0,
-
-    orbit_pitch = PI/2,
+    far_plane   = cast(float32)10000.0,
 };
 
 
@@ -56,81 +54,123 @@ cube_mesh: Mesh : {
     ]
 };
 
+WORLD_SIZE   :: 4096;
+WORLD_HEIGHT :: 512;
+MAX_DEPTH_BUCKETS :: 1024;
+
+WORLD_HALF_X :: cast(float32) WORLD_SIZE * 0.5;
+WORLD_HALF_Y :: cast(float32) WORLD_SIZE * 0.5;
+
+X_PLANE_COUNT :: WORLD_SIZE + 1;
+Y_PLANE_COUNT :: WORLD_SIZE + 1;
+Z_PLANE_COUNT :: WORLD_HEIGHT + 1;
+
+PLANE_INDEX_COUNT      :: 6;
+INDIRECT_COMMAND_COUNT :: X_PLANE_COUNT + Y_PLANE_COUNT + Z_PLANE_COUNT;
+TOTAL_PLANES           :: X_PLANE_COUNT + Y_PLANE_COUNT + Z_PLANE_COUNT;
+
+TOTAL_INSTANCES       :: 1;
+MAX_VISIBLE_INSTANCES :: 1;
+
+// A single world-sized mesh, centered on XY at (-WORLD_HALF..+WORLD_HALF),
+// with Z spanning 0..WORLD_HEIGHT.
+
 world_mesh :: #run -> Mesh {
     result: Mesh;
 
-    WORLD_SIZE :: 100;
-    WORLD_HEIGHT :: 100;
-
     vertices: [..]Vertex;
-    indices: [..]u32;
-    
+    indices:  [..]u32;
+
+    add_quad :: (verts: *[..]Vertex, idxs: *[..]u32, axis_color: Vec3,
+    uv0: Vec2, uv1: Vec2, uv2: Vec2, uv3: Vec2,
+    p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3) {
+        base := cast(u32) verts.count;
+        array_add(verts, .{ position = p0, color = axis_color, uv = uv0 });
+        array_add(verts, .{ position = p1, color = axis_color, uv = uv1 });
+        array_add(verts, .{ position = p2, color = axis_color, uv = uv2 });
+        array_add(verts, .{ position = p3, color = axis_color, uv = uv3 });
+        array_add(idxs, base + 0);
+        array_add(idxs, base + 1);
+        array_add(idxs, base + 2);
+        array_add(idxs, base + 0);
+        array_add(idxs, base + 2);
+        array_add(idxs, base + 3);
+    }
+
+    // Block 0: X-walls (x = -WORLD_HALF_X .. +WORLD_HALF_X, spanning Y × Z of world)
     for coord: 0..WORLD_SIZE {
-        {
-            array_add(*vertices, .{
-                position = .{xx coord, 0, 0},
-                uv = .{0, 0}
-            });
+        x := cast(float32) coord - WORLD_HALF_X;
+        uv0: Vec2 = .{0, 0};
+        uv1: Vec2 = .{0, WORLD_HEIGHT};
+        uv2: Vec2 = .{WORLD_SIZE, WORLD_HEIGHT};
+        uv3: Vec2 = .{WORLD_SIZE, 0};
+        add_quad(*vertices, *indices, .{1, 0, 0},
+        uv0, uv1, uv2, uv3,
+        .{x, -WORLD_HALF_Y, 0           },
+        .{x, -WORLD_HALF_Y, WORLD_HEIGHT},
+        .{x,  WORLD_HALF_Y, WORLD_HEIGHT},
+        .{x,  WORLD_HALF_Y, 0           });
+    }
 
-            array_add(*vertices, .{ 
-                position = .{xx coord, 0, WORLD_HEIGHT},
-                uv = .{0, 1}
-            });
- 
-            array_add(*vertices, .{
-                position = .{xx coord, WORLD_SIZE, WORLD_HEIGHT},
-                uv = .{1, 1}
-            });
+    // Block 1: Y-walls (y = -WORLD_HALF_Y .. +WORLD_HALF_Y, spanning X × Z of world)
+    for coord: 0..WORLD_SIZE {
+        y := cast(float32) coord - WORLD_HALF_Y;
+        uv0: Vec2 = .{0, 0};
+        uv1: Vec2 = .{0, WORLD_HEIGHT};
+        uv2: Vec2 = .{WORLD_SIZE, WORLD_HEIGHT};
+        uv3: Vec2 = .{WORLD_SIZE, 0};
+        add_quad(*vertices, *indices, .{0, 1, 0},
+        uv0, uv1, uv2, uv3,
+        .{-WORLD_HALF_X, y, 0           },
+        .{-WORLD_HALF_X, y, WORLD_HEIGHT},
+        .{ WORLD_HALF_X, y, WORLD_HEIGHT},
+        .{ WORLD_HALF_X, y, 0           });
+    }
 
-            array_add(*vertices, .{
-                position = .{xx coord, WORLD_SIZE, 0},
-                uv = .{1, 0}
-            });
-
-            array_add(*indices, xx (vertices.count-4));
-            array_add(*indices, xx (vertices.count-3));
-            array_add(*indices, xx (vertices.count-2));
-            array_add(*indices, xx (vertices.count-4));
-            array_add(*indices, xx (vertices.count-2));
-            array_add(*indices, xx (vertices.count-1));
-        }
-
-        {
-            array_add(*vertices, .{
-                position = .{ 0, xx coord, 0},
-                uv = .{0, 0}
-            });
-
-            array_add(*vertices, .{ 
-                position = .{ 0, xx coord, WORLD_HEIGHT},
-                uv = .{0, 1}
-            });
-
-            array_add(*vertices, .{
-                position = .{ WORLD_SIZE, xx coord, WORLD_HEIGHT},
-                uv = .{1, 1}
-            });
-
-            array_add(*vertices, .{
-                position = .{ WORLD_SIZE, xx coord, 0},
-                uv = .{1, 0}
-            });
-
-            array_add(*indices, xx (vertices.count-4));
-            array_add(*indices, xx (vertices.count-3));
-            array_add(*indices, xx (vertices.count-2));
-            array_add(*indices, xx (vertices.count-4));
-            array_add(*indices, xx (vertices.count-2));
-            array_add(*indices, xx (vertices.count-1));
-        }
-        
+    // Block 2: Z-floors (z = 0 .. WORLD_HEIGHT, spanning X × Y of world)
+    for coord: 0..WORLD_HEIGHT {
+        z := cast(float32) coord;
+        uv0: Vec2 = .{0, 0};
+        uv1: Vec2 = .{0, WORLD_SIZE};
+        uv2: Vec2 = .{WORLD_SIZE, WORLD_SIZE};
+        uv3: Vec2 = .{WORLD_SIZE, 0};
+        add_quad(*vertices, *indices, .{0, 0, 1},
+        uv0, uv1, uv2, uv3,
+        .{-WORLD_HALF_X, -WORLD_HALF_Y, z},
+        .{-WORLD_HALF_X,  WORLD_HALF_Y, z},
+        .{ WORLD_HALF_X,  WORLD_HALF_Y, z},
+        .{ WORLD_HALF_X, -WORLD_HALF_Y, z});
     }
 
     result.vertices = vertices;
-    result.indices = indices;
+    result.indices  = indices;
 
     return result;
 }
+
+// Push constants for the frustum population shader.
+Populate_Push :: struct {
+    mode:              u32;
+    total_planes:      u32;
+    bucket_count:      u32;
+    plane_index_count: u32;
+    world_size:        u32;
+    world_height:      u32;
+    _padding0:         u32;
+    _padding1:         u32;
+    tan_half_fov_h:    float32;
+    tan_half_fov_v:    float32;
+    near_plane:        float32;
+    far_plane:         float32;
+    camera_pos:        Vec4;
+    camera_forward:    Vec4;
+    camera_right:      Vec4;
+    camera_up:         Vec4;
+}
+
+#load "../passes/compute.jai";
+#load "../passes/main.jai";
+#load "../passes/post.jai";
 
 Test_Render :: struct {
 
@@ -144,7 +184,7 @@ Test_Render :: struct {
         log("Upload vertices");
         upload_buffer_data_sync(*render_app.vertex_buffer, mesh.vertices.data, xx vertex_size);
 
-        // Create device-local index buffer
+        // Create and upload index buffer for the world mesh
         index_size := size_of(u32) * mesh.indices.count;
         render_app.index_buffer = create_buffer(xx index_size,
                                                 .INDEX_BUFFER_BIT | .TRANSFER_DST_BIT,
@@ -203,166 +243,14 @@ Test_Render :: struct {
         cmd := render_app.cmd_buffers.graphics[index];
         extent := render_app.swapchain_data.swapchainExtent;
 
-        subResourceRange: VkImageSubresourceRange = .{
-            aspectMask     = .COLOR_BIT,
-            baseMipLevel   = 0,
-            levelCount     = VK_REMAINING_MIP_LEVELS,
-            baseArrayLayer = 0,
-            layerCount     = VK_REMAINING_ARRAY_LAYERS,
-        };
-
-        scene_color := *render_app.post_framebuffer;
-        transition_image_layout(cmd, scene_color.image, scene_color.layout, .COLOR_ATTACHMENT_OPTIMAL);
-        render_app.post_framebuffer.layout = .COLOR_ATTACHMENT_OPTIMAL;
-        transition_depth_layout(cmd, render_app.depth_data.layout, .DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-        render_app.depth_data.layout = .DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        aspect := cast(float32)extent.width / cast(float32)extent.height;
 
         clearColor:       VkClearValue;
         clearColor.color._float32 = float.[ 0.1, 0.1, 0.1, 1.0 ];
 
-        scene_color_attachment: VkRenderingAttachmentInfo = .{
-            imageView   = scene_color.view,
-            imageLayout = .COLOR_ATTACHMENT_OPTIMAL,
-            loadOp      = .CLEAR,
-            storeOp     = .STORE,
-            clearValue  = clearColor,
-        };
-
-        clear_depth:      VkClearValue;
-        clear_depth.depthStencil = .{depth = 1.0, stencil = 0};
-
-        depth_attachment: VkRenderingAttachmentInfo = .{
-            imageView   = render_app.depth_data.view,
-            imageLayout = .DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            loadOp      = .CLEAR,
-            storeOp     = .STORE,
-            clearValue  = clear_depth,
-        };
-
-        scene_rendering_info: VkRenderingInfo = .{
-            renderArea           = .{offset = .{0, 0}, extent = extent},
-            layerCount           = 1,
-            colorAttachmentCount = 1,
-            pColorAttachments    = *scene_color_attachment,
-            pDepthAttachment     = *depth_attachment,
-        };
-
-        vkCmdBeginRendering(cmd, *scene_rendering_info);
-
-        vkCmdBindPipeline(cmd, .GRAPHICS, render_app.pipeline_data.scene_pipeline);
-
-        viewport: VkViewport = .{
-            x        = 0,
-            y        = 0,
-            width    = xx extent.width,
-            height   = xx extent.height,
-            minDepth = 0.0,
-            maxDepth = 1.0,
-        };
-
-        vkCmdSetViewport(cmd, 0, 1, *viewport);
-
-        scissor: VkRect2D = .{offset = .{0, 0}, extent = extent};
-        vkCmdSetScissor(cmd, 0, 1, *scissor);
-
-        // --- Bind vertex and index buffers ---
-        vertex_buffers: [1]VkBuffer = .[ render_app.vertex_buffer.buffer ];
-        offsets:        [1]u64      = .[ 0 ];
-
-        vkCmdBindVertexBuffers(cmd, 0, 1, vertex_buffers.data, offsets.data);
-        vkCmdBindIndexBuffer(cmd, render_app.index_buffer.buffer, 0, .UINT32);
-
-        aspect := cast(float32)extent.width / cast(float32)extent.height;
-        projection := get_projection_matrix(camera, aspect);
-        view := camera.orbit_view;
-        globals:          Global_Uniforms;
-        globals.view       = view;
-        globals.proj       = projection;
-        globals.resolution = .{ cast(float32)extent.width, cast(float32)extent.height };
-        globals.time       = 0;
-        memcpy(render_app.descriptor_data.global_ubo_mapped[index], *globals, size_of(Global_Uniforms));
-
-        object_data: Object_Data = .{
-            model         = to_matrix(Transform.{translation = .{-50, -50, -50}}),
-            texture_index = 0,
-        };
-
-        memcpy(render_app.descriptor_data.object_ssbo_mapped[index], *object_data,
-               size_of(Object_Data));
-
-        indirect_cmd: VkDrawIndexedIndirectCommand = .{
-            indexCount    = xx world_mesh.indices.count,
-            instanceCount = 1,
-            firstIndex    = 0,
-            vertexOffset  = 0,
-            firstInstance = 0,
-        };
-
-        memcpy(render_app.descriptor_data.indirect_mapped, *indirect_cmd, size_of(VkDrawIndexedIndirectCommand));
-
-        vkCmdBindDescriptorSets(cmd, .GRAPHICS, render_app.pipeline_data.pipeline_layout,
-                                0, 1, *render_app.descriptor_data.sets[index], 0, null);
-
-        // --- Draw indexed indirect ---
-        vkCmdDrawIndexedIndirect(cmd, render_app.descriptor_data.indirect_buffer.buffer,
-                                 0, 1, xx size_of(VkDrawIndexedIndirectCommand));
-
-        vkCmdEndRendering(cmd);
-
-        transition_image_layout(cmd, scene_color.image, .COLOR_ATTACHMENT_OPTIMAL, .SHADER_READ_ONLY_OPTIMAL);
-        render_app.post_framebuffer.layout = .SHADER_READ_ONLY_OPTIMAL;
-        transition_depth_layout(cmd, render_app.depth_data.layout, .DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-        render_app.depth_data.layout = .DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-
-        imgMemoryBarrier: VkImageMemoryBarrier = .{
-            srcAccessMask       = 0,
-            dstAccessMask       = .COLOR_ATTACHMENT_WRITE_BIT,
-            oldLayout           = .UNDEFINED,
-            newLayout           = .COLOR_ATTACHMENT_OPTIMAL,
-            srcQueueFamilyIndex = xx render_app.q_indices.graphics,
-            dstQueueFamilyIndex = xx render_app.q_indices.graphics,
-            image               = render_app.swapchain_data.swapchainImages[imageIndex],
-            subresourceRange    = subResourceRange,
-        };
-
-        vkCmdPipelineBarrier(cmd, .TOP_OF_PIPE_BIT, .COLOR_ATTACHMENT_OUTPUT_BIT,
-                             0, 0, null, 0, null, 1, *imgMemoryBarrier);
-
-        post_color_attachment: VkRenderingAttachmentInfo = .{
-            imageView   = render_app.swapchain_data.imageViews[imageIndex],
-            imageLayout = .COLOR_ATTACHMENT_OPTIMAL,
-            loadOp      = .CLEAR,
-            storeOp     = .STORE,
-            clearValue  = clearColor,
-        };
-
-        post_rendering_info: VkRenderingInfo = .{
-            renderArea           = .{offset = .{0, 0}, extent = extent},
-            layerCount           = 1,
-            colorAttachmentCount = 1,
-            pColorAttachments    = *post_color_attachment,
-        };
-
-        vkCmdBeginRendering(cmd, *post_rendering_info);
-        vkCmdBindPipeline(cmd, .GRAPHICS, render_app.pipeline_data.post_pipeline);
-        vkCmdSetViewport(cmd, 0, 1, *viewport);
-        vkCmdSetScissor(cmd, 0, 1, *scissor);
-        // Bind set 0 (globals) and set 1 (post-process framebuffer)
-        post_descriptor_sets: [2]VkDescriptorSet = .[
-            render_app.descriptor_data.sets[index],
-            render_app.descriptor_data.post_set,
-        ];
-        vkCmdBindDescriptorSets(cmd, .GRAPHICS, render_app.pipeline_data.post_pipeline_layout,
-                                0, 2, post_descriptor_sets.data, 0, null);
-        vkCmdDraw(cmd, 3, 1, 0, 0);
-        vkCmdEndRendering(cmd);
-
-        imgMemoryBarrier.srcAccessMask = .COLOR_ATTACHMENT_WRITE_BIT;
-        imgMemoryBarrier.dstAccessMask = 0;
-        imgMemoryBarrier.oldLayout     = .COLOR_ATTACHMENT_OPTIMAL;
-        imgMemoryBarrier.newLayout     = .PRESENT_SRC_KHR;
-        vkCmdPipelineBarrier(cmd, .COLOR_ATTACHMENT_OUTPUT_BIT, .BOTTOM_OF_PIPE_BIT,
-                             0, 0, null, 0, null, 1, *imgMemoryBarrier);
+        compute_pass(cmd, index, aspect);
+        main_pass(cmd, index, extent, aspect, clearColor);
+        post_pass(cmd, index, imageIndex, extent, clearColor);
 
         vkEndCommandBuffer(render_app.cmd_buffers.graphics[index]);
 

@@ -4,20 +4,19 @@ Shader_Data :: struct {
 
 
 create_shader_module :: (name: Name) -> VkShaderModule {
-    found, shader := table_find(*shader_registry, name.id);
+    shader: VkShaderModule;
 
-    if !found {
-        s_data := get_asset(Shader_Data, name);
-        defer unload_asset(Shader_Data, name);
+    s_data := get_asset(Shader_Data, name);
+    defer unload_asset(Shader_Data, name);
 
-        create_info := VkShaderModuleCreateInfo.{};
-        create_info.codeSize = xx s_data.code.count;
-        create_info.pCode    = xx s_data.code.data;
+    assert(s_data.code.count > 0, "Shader asset '%' is empty.", name.id);
 
-        vkCreateShaderModule(render_app.device, *create_info, null, *shader);
+    create_info := VkShaderModuleCreateInfo.{};
+    create_info.codeSize = xx s_data.code.count;
+    create_info.pCode    = xx s_data.code.data;
 
-        table_add(*shader_registry, name.id, shader);
-    }
+    result := vkCreateShaderModule(render_app.device, *create_info, null, *shader);
+    assert(result == .SUCCESS, "Failed to create shader module '%': %", name.id, result);
 
     return shader;
 }
@@ -27,12 +26,5 @@ destroy_shader_module :: (module: VkShaderModule) {
 }
 
 clear_shaders :: () {
-    for shader: shader_registry
-        destroy_shader_module(shader);
-
     clear_asset_registry(Shader_Data);
 }
-
-#scope_file
-
-shader_registry: Table(u64, VkShaderModule);

@@ -25,13 +25,13 @@ init_vulkan :: () {
     create_swapchain();
     create_depth();
     create_descriptors();
-    create_pipeline();
     create_render();
+    create_pipeline();
 }
 
 deinit_vulkan :: () {
-    destroy_render();
     destroy_pipeline();
+    destroy_render();
     destroy_descriptors();
     destroy_depth();
     destroy_swapchain();

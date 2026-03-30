@@ -1,8 +1,10 @@
 Pipeline_Data :: struct {
-    scene_pipeline:       VkPipeline;
-    post_pipeline:        VkPipeline;
-    pipeline_layout:      VkPipelineLayout;
-    post_pipeline_layout: VkPipelineLayout;
+    scene_pipeline:          VkPipeline;
+    post_pipeline:           VkPipeline;
+    compute_pipeline:        VkPipeline;
+    pipeline_layout:         VkPipelineLayout;
+    post_pipeline_layout:    VkPipelineLayout;
+    compute_pipeline_layout: VkPipelineLayout;
 }
 
 Shader_Globals :: struct {
@@ -20,6 +22,33 @@ make_shader_stages :: (path: string) -> [2]VkPipelineShaderStageCreateInfo {
             stage  = .VERTEX_BIT,
             module = shader_module,
             pName  = "vert_main",
+        },
+        .{
+            stage  = .FRAGMENT_BIT,
+            module = shader_module,
+            pName  = "frag_main",
+        },
+    ];
+}
+
+make_tessellated_shader_stages :: (path: string) -> [4]VkPipelineShaderStageCreateInfo {
+    shader_module := create_shader_module(Name.from_path(path));
+
+    return .[
+        .{
+            stage  = .VERTEX_BIT,
+            module = shader_module,
+            pName  = "vert_main",
+        },
+        .{
+            stage  = .TESSELLATION_CONTROL_BIT,
+            module = shader_module,
+            pName  = "hull_main",
+        },
+        .{
+            stage  = .TESSELLATION_EVALUATION_BIT,
+            module = shader_module,
+            pName  = "domain_main",
         },
         .{
             stage  = .FRAGMENT_BIT,
@@ -48,12 +77,30 @@ create_pipeline :: () {
     };
     vkCreatePipelineLayout(render_app.device, *post_layout_info, null, *render_app.pipeline_data.post_pipeline_layout);
 
+    compute_push_range: VkPushConstantRange = .{
+        stageFlags = .COMPUTE_BIT,
+        offset     = 0,
+        size       = xx size_of(Populate_Push),
+    };
+
+    compute_layout_info: VkPipelineLayoutCreateInfo = .{
+        setLayoutCount         = 1,
+        pSetLayouts            = *render_app.descriptor_data.compute_set_layout,
+        pushConstantRangeCount = 1,
+        pPushConstantRanges    = *compute_push_range,
+    };
+    vkCreatePipelineLayout(render_app.device, *compute_layout_info, null, *render_app.pipeline_data.compute_pipeline_layout);
+
     create_scene_pipeline();
     create_post_pipeline();
+    create_compute_pipeline();
 }
+
+WIREFRAME :: false;
 
 create_scene_pipeline :: () {
     shader_stages := make_shader_stages("/shaders/test.slang");
+    defer destroy_shader_module(shader_stages[0].module);
 
     dynamic_states := VkDynamicState.[
         VkDynamicState.VIEWPORT,
@@ -94,7 +141,7 @@ create_scene_pipeline :: () {
     };
 
     rasterization_state: VkPipelineRasterizationStateCreateInfo = .{
-        polygonMode = .FILL,
+        polygonMode = ifx WIREFRAME then .LINE else .FILL,
         cullMode    = .NONE,
         frontFace   = .CLOCKWISE,
         lineWidth   = 1.0,
@@ -121,7 +168,7 @@ create_scene_pipeline :: () {
         pAttachments    = *color_blend_attachment,
     };
 
-    color_format := render_app.swapchain_data.surfaceFormat.format;
+    color_format := render_app.post_framebuffer.format;
     pipeline_rendering: VkPipelineRenderingCreateInfo = .{
         colorAttachmentCount    = 1,
         pColorAttachmentFormats = *color_format,
@@ -150,6 +197,7 @@ create_scene_pipeline :: () {
 
 create_post_pipeline :: () {
     shader_stages := make_shader_stages("/shaders/postprocess.slang");
+    defer destroy_shader_module(shader_stages[0].module);
 
     dynamic_states := VkDynamicState.[
         VkDynamicState.VIEWPORT,
@@ -225,14 +273,38 @@ create_post_pipeline :: () {
         log_error("Failed to create post-process pipeline: %", result);
 }
 
+create_compute_pipeline :: () {
+    shader_module := create_shader_module(Name.from_path("/shaders/reorder_indices.slang"));
+    defer destroy_shader_module(shader_module);
+
+    stage_info: VkPipelineShaderStageCreateInfo = .{
+        stage  = .COMPUTE_BIT,
+        module = shader_module,
+        pName  = "main",
+    };
+
+    pipeline_info: VkComputePipelineCreateInfo = .{
+        stage  = stage_info,
+        layout = render_app.pipeline_data.compute_pipeline_layout,
+    };
+
+    result := vkCreateComputePipelines(render_app.device, VK_NULL_HANDLE, 1, *pipeline_info, null, *render_app.pipeline_data.compute_pipeline);
+    if result != .SUCCESS
+        log_error("Failed to create compute pipeline: %", result);
+}
+
 destroy_pipeline :: () {
     if render_app.pipeline_data.scene_pipeline != VK_NULL_HANDLE
         vkDestroyPipeline(render_app.device, render_app.pipeline_data.scene_pipeline, null);
     if render_app.pipeline_data.post_pipeline != VK_NULL_HANDLE
         vkDestroyPipeline(render_app.device, render_app.pipeline_data.post_pipeline, null);
+    if render_app.pipeline_data.compute_pipeline != VK_NULL_HANDLE
+        vkDestroyPipeline(render_app.device, render_app.pipeline_data.compute_pipeline, null);
     if render_app.pipeline_data.pipeline_layout != VK_NULL_HANDLE
         vkDestroyPipelineLayout(render_app.device, render_app.pipeline_data.pipeline_layout, null);
     if render_app.pipeline_data.post_pipeline_layout != VK_NULL_HANDLE
         vkDestroyPipelineLayout(render_app.device, render_app.pipeline_data.post_pipeline_layout, null);
+    if render_app.pipeline_data.compute_pipeline_layout != VK_NULL_HANDLE
+        vkDestroyPipelineLayout(render_app.device, render_app.pipeline_data.compute_pipeline_layout, null);
     clear_shaders();
 }
