@@ -96,7 +96,7 @@ create_pipeline :: () {
     create_compute_pipeline();
 }
 
-WIREFRAME :: true;
+WIREFRAME :: false;
 
 create_scene_pipeline :: () {
     shader_stages := make_tessellated_shader_stages("/shaders/test.slang");
