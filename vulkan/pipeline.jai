@@ -96,10 +96,10 @@ create_pipeline :: () {
     create_compute_pipeline();
 }
 
-WIREFRAME :: false;
+WIREFRAME :: true;
 
 create_scene_pipeline :: () {
-    shader_stages := make_shader_stages("/shaders/test.slang");
+    shader_stages := make_tessellated_shader_stages("/shaders/test.slang");
     defer destroy_shader_module(shader_stages[0].module);
 
     dynamic_states := VkDynamicState.[
@@ -114,7 +114,7 @@ create_scene_pipeline :: () {
 
     vertex_binding: VkVertexInputBindingDescription = .{
         binding   = 0,
-        stride    = 32,
+        stride    = 36,
         inputRate = .VERTEX,
     };
 
@@ -122,6 +122,7 @@ create_scene_pipeline :: () {
         .{location = 0, binding = 0, format = .R32G32B32_SFLOAT, offset = 0},
         .{location = 1, binding = 0, format = .R32G32B32_SFLOAT, offset = 12},
         .{location = 2, binding = 0, format = .R32G32_SFLOAT,    offset = 24},
+        .{location = 3, binding = 0, format = .R32_SFLOAT,       offset = 32},
     ];
 
     vertex_info: VkPipelineVertexInputStateCreateInfo = .{
@@ -132,7 +133,16 @@ create_scene_pipeline :: () {
     };
 
     vertex_assembly: VkPipelineInputAssemblyStateCreateInfo = .{
-        topology = .TRIANGLE_LIST,
+        topology = .PATCH_LIST,
+    };
+
+    tessellation_domain_origin: VkPipelineTessellationDomainOriginStateCreateInfo = .{
+        domainOrigin = .LOWER_LEFT,
+    };
+
+    tessellation_state: VkPipelineTessellationStateCreateInfo = .{
+        pNext              = *tessellation_domain_origin,
+        patchControlPoints = 4,
     };
 
     viewport_state: VkPipelineViewportStateCreateInfo = .{
@@ -154,7 +164,7 @@ create_scene_pipeline :: () {
     depth_stencil_state: VkPipelineDepthStencilStateCreateInfo = .{
         depthTestEnable       = VK_TRUE,
         depthWriteEnable      = VK_TRUE,
-        depthCompareOp        = .LESS,
+        depthCompareOp        = .GREATER,
         depthBoundsTestEnable = VK_FALSE,
         stencilTestEnable     = VK_FALSE,
     };
@@ -181,6 +191,7 @@ create_scene_pipeline :: () {
         pStages             = shader_stages.data,
         pVertexInputState   = *vertex_info,
         pInputAssemblyState = *vertex_assembly,
+        pTessellationState  = *tessellation_state,
         pViewportState      = *viewport_state,
         pRasterizationState = *rasterization_state,
         pMultisampleState   = *multisample_state,

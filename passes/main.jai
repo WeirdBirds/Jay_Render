@@ -15,7 +15,7 @@ main_pass :: (cmd: VkCommandBuffer, index: s64, extent: VkExtent2D,
     };
 
     clear_depth: VkClearValue;
-    clear_depth.depthStencil = .{depth = 1.0, stencil = 0};
+    clear_depth.depthStencil = .{depth = 0.0, stencil = 0};
 
     depth_attachment: VkRenderingAttachmentInfo = .{
         imageView   = render_app.depth_data.view,
@@ -57,10 +57,13 @@ main_pass :: (cmd: VkCommandBuffer, index: s64, extent: VkExtent2D,
     projection := get_projection_matrix(camera, aspect);
     view := get_view_matrix(camera);
     globals: Global_Uniforms;
+    camera_pos := get_translation(camera.transform);
     globals.view       = view;
     globals.proj       = projection;
     globals.resolution = .{ cast(float32)extent.width, cast(float32)extent.height };
     globals.time       = 0;
+    globals._padding0  = 0;
+    globals.camera_pos = .{camera_pos.x, camera_pos.y, camera_pos.z, 0};
     memcpy(render_app.descriptor_data.global_ubo_mapped[index], *globals, size_of(Global_Uniforms));
 
     object_data: Object_Data = .{
@@ -72,8 +75,10 @@ main_pass :: (cmd: VkCommandBuffer, index: s64, extent: VkExtent2D,
 
     vkCmdBindDescriptorSets(cmd, .GRAPHICS, render_app.pipeline_data.pipeline_layout,
                             0, 1, *render_app.descriptor_data.sets[index], 0, null);
+
     vkCmdDrawIndexedIndirect(cmd, render_app.descriptor_data.indirect_buffers[index].buffer,
                              0, xx TOTAL_PLANES, xx size_of(VkDrawIndexedIndirectCommand));
+
     vkCmdEndRendering(cmd);
 
     transition_image_layout(cmd, scene_color.image, .COLOR_ATTACHMENT_OPTIMAL, .SHADER_READ_ONLY_OPTIMAL);

@@ -1,7 +1,8 @@
 camera: Camera_Orbit = .{
-    fov_radians = cast(float32)(60.0 * DEG_TO_RAD),
-    near_plane  = cast(float32)0.1,
-    far_plane   = cast(float32)10000.0,
+    fov_radians = 60.0 * DEG_TO_RAD,
+    near_plane  = 0.4,
+    far_plane   = 5000,
+    move_speed  = 1000
 };
 
 
@@ -65,7 +66,7 @@ X_PLANE_COUNT :: WORLD_SIZE + 1;
 Y_PLANE_COUNT :: WORLD_SIZE + 1;
 Z_PLANE_COUNT :: WORLD_HEIGHT + 1;
 
-PLANE_INDEX_COUNT      :: 6;
+PLANE_INDEX_COUNT      :: 4;
 INDIRECT_COMMAND_COUNT :: X_PLANE_COUNT + Y_PLANE_COUNT + Z_PLANE_COUNT;
 TOTAL_PLANES           :: X_PLANE_COUNT + Y_PLANE_COUNT + Z_PLANE_COUNT;
 
@@ -81,18 +82,18 @@ world_mesh :: #run -> Mesh {
     vertices: [..]Vertex;
     indices:  [..]u32;
 
-    add_quad :: (verts: *[..]Vertex, idxs: *[..]u32, axis_color: Vec3,
+    add_quad :: (verts: *[..]Vertex, idxs: *[..]u32, plane_normal: Vec3, plane_coord: float32,
     uv0: Vec2, uv1: Vec2, uv2: Vec2, uv3: Vec2,
     p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3) {
         base := cast(u32) verts.count;
-        array_add(verts, .{ position = p0, color = axis_color, uv = uv0 });
-        array_add(verts, .{ position = p1, color = axis_color, uv = uv1 });
-        array_add(verts, .{ position = p2, color = axis_color, uv = uv2 });
-        array_add(verts, .{ position = p3, color = axis_color, uv = uv3 });
+
+        array_add(verts, .{ position = p0, color = plane_normal, uv = uv0, plane_coord = plane_coord });
+        array_add(verts, .{ position = p1, color = plane_normal, uv = uv1, plane_coord = plane_coord });
+        array_add(verts, .{ position = p2, color = plane_normal, uv = uv2, plane_coord = plane_coord });
+        array_add(verts, .{ position = p3, color = plane_normal, uv = uv3, plane_coord = plane_coord });
+        
         array_add(idxs, base + 0);
         array_add(idxs, base + 1);
-        array_add(idxs, base + 2);
-        array_add(idxs, base + 0);
         array_add(idxs, base + 2);
         array_add(idxs, base + 3);
     }
@@ -101,10 +102,10 @@ world_mesh :: #run -> Mesh {
     for coord: 0..WORLD_SIZE {
         x := cast(float32) coord - WORLD_HALF_X;
         uv0: Vec2 = .{0, 0};
-        uv1: Vec2 = .{0, WORLD_HEIGHT};
-        uv2: Vec2 = .{WORLD_SIZE, WORLD_HEIGHT};
-        uv3: Vec2 = .{WORLD_SIZE, 0};
-        add_quad(*vertices, *indices, .{1, 0, 0},
+        uv1: Vec2 = .{0, 1};
+        uv2: Vec2 = .{1, 1};
+        uv3: Vec2 = .{1, 0};
+        add_quad(*vertices, *indices, .{-1, 0, 0}, cast(float32) coord,
         uv0, uv1, uv2, uv3,
         .{x, -WORLD_HALF_Y, 0           },
         .{x, -WORLD_HALF_Y, WORLD_HEIGHT},
@@ -116,10 +117,10 @@ world_mesh :: #run -> Mesh {
     for coord: 0..WORLD_SIZE {
         y := cast(float32) coord - WORLD_HALF_Y;
         uv0: Vec2 = .{0, 0};
-        uv1: Vec2 = .{0, WORLD_HEIGHT};
-        uv2: Vec2 = .{WORLD_SIZE, WORLD_HEIGHT};
-        uv3: Vec2 = .{WORLD_SIZE, 0};
-        add_quad(*vertices, *indices, .{0, 1, 0},
+        uv1: Vec2 = .{0, 1};
+        uv2: Vec2 = .{1, 1};
+        uv3: Vec2 = .{1, 0};
+        add_quad(*vertices, *indices, .{0, 1, 0}, cast(float32) coord,
         uv0, uv1, uv2, uv3,
         .{-WORLD_HALF_X, y, 0           },
         .{-WORLD_HALF_X, y, WORLD_HEIGHT},
@@ -131,10 +132,10 @@ world_mesh :: #run -> Mesh {
     for coord: 0..WORLD_HEIGHT {
         z := cast(float32) coord;
         uv0: Vec2 = .{0, 0};
-        uv1: Vec2 = .{0, WORLD_SIZE};
-        uv2: Vec2 = .{WORLD_SIZE, WORLD_SIZE};
-        uv3: Vec2 = .{WORLD_SIZE, 0};
-        add_quad(*vertices, *indices, .{0, 0, 1},
+        uv1: Vec2 = .{0, 1};
+        uv2: Vec2 = .{1, 1};
+        uv3: Vec2 = .{1, 0};
+        add_quad(*vertices, *indices, .{0, 0, -1}, cast(float32) coord,
         uv0, uv1, uv2, uv3,
         .{-WORLD_HALF_X, -WORLD_HALF_Y, z},
         .{-WORLD_HALF_X,  WORLD_HALF_Y, z},
@@ -209,6 +210,7 @@ Test_Render :: struct {
     destroy_geometry :: () {
         // Wait for all GPU work to complete before destroying buffers
         vkDeviceWaitIdle(render_app.device);
+
         destroy_buffer(*render_app.vertex_buffer);
         destroy_buffer(*render_app.index_buffer);
     }

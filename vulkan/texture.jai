@@ -106,7 +106,7 @@ upload_texture_data :: (texture: *Texture, pixels: *u8, data_size: s64) {
     vkCmdCopyBufferToImage(cmd, staging.buffer, texture.image, .TRANSFER_DST_OPTIMAL, 1, *region);
 
     // Generate mipmaps by blitting each level from the previous one.
-    // NEAREST filter preserves crisp pixel-art texels at every mip level.
+    // LINEAR filter produces smoother, more stable distant mips.
     if texture.mip_levels > 1
         generate_mipmaps(cmd, texture);
     else {
@@ -122,7 +122,7 @@ upload_texture_data :: (texture: *Texture, pixels: *u8, data_size: s64) {
     vkResetCommandBuffer(cmd, 0);
 }
 
-// Generate mipmaps via successive blits with NEAREST filtering.
+// Generate mipmaps via successive blits with LINEAR filtering.
 // Expects mip 0 in TRANSFER_DST_OPTIMAL and all other mips in TRANSFER_DST_OPTIMAL.
 // Leaves all mip levels in SHADER_READ_ONLY_OPTIMAL.
 generate_mipmaps :: (cmd: VkCommandBuffer, texture: *Texture) {
@@ -148,7 +148,7 @@ generate_mipmaps :: (cmd: VkCommandBuffer, texture: *Texture) {
         vkCmdBlitImage(cmd,
                        texture.image, .TRANSFER_SRC_OPTIMAL,
                        texture.image, .TRANSFER_DST_OPTIMAL,
-                       1, *blit, .NEAREST);
+                       1, *blit, .LINEAR);
 
         // Transition the source level to SHADER_READ_ONLY (done with it).
         transition_image_layout(cmd, texture.image, .TRANSFER_SRC_OPTIMAL, .SHADER_READ_ONLY_OPTIMAL, cast(u32)(level - 1), 1);

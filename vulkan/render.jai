@@ -18,7 +18,7 @@ create_render :: () {
         vkCreateSemaphore(render_app.device, *semaphore_info, null, *render_app.render_data.image_finished_semaphores[it]);
 
     create_postprocess();
-    render_app.sampler = create_sampler(.NEAREST, anisotropy = true, max_lod = 16.0);
+    render_app.sampler = create_sampler(.NEAREST, anisotropy = false, max_lod = 16.0);
 }
 
 destroy_render :: () {

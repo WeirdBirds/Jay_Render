@@ -98,9 +98,10 @@ create_device :: () {
 
     // Enable base Vulkan 1.0 features
     device_features: VkPhysicalDeviceFeatures = .{};
-    device_features.samplerAnisotropy = VK_TRUE;
-    device_features.fillModeNonSolid  = VK_TRUE;
-    device_features.multiDrawIndirect = VK_TRUE;
+    device_features.samplerAnisotropy  = VK_TRUE;
+    device_features.fillModeNonSolid   = VK_TRUE;
+    device_features.multiDrawIndirect  = VK_TRUE;
+    device_features.tessellationShader = VK_TRUE;
 
     device_info: VkDeviceCreateInfo = .{};
     device_info.pNext                   = *vulkan12_features;

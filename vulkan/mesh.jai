@@ -4,7 +4,8 @@ Mesh :: struct {
 }
 
 Vertex :: struct {
-    position: Vec3;
-    color:    Vec3;
-    uv:       Vec2;
+    position:    Vec3;
+    color:       Vec3;
+    uv:          Vec2;
+    plane_coord: float32;
 }

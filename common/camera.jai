@@ -7,7 +7,7 @@ Camera :: struct {
     far_plane:   float32;
 }
 
-// Builds a perspective projection matrix (depth [0..1]).
+// Builds a reverse-Z perspective projection matrix (depth [0..1], near->1, far->0).
 // `aspect` is width / height.
 get_projection_matrix :: (cam: Camera, aspect: float32) -> Mat4 {
     return make_perspective(cam.fov_radians, aspect, cam.near_plane, cam.far_plane);
@@ -21,15 +21,15 @@ get_view_matrix :: (cam: Camera) -> Mat4 {
     return make_look_at(eye, eye + forward, up);
 }
 
-// Builds a right-handed perspective projection matrix.
-// Depth maps to [0..1] (Vulkan convention), Y is flipped.
+// Builds a right-handed reverse-Z perspective projection matrix.
+// Depth maps to [0..1] (Vulkan convention), with near at 1 and far at 0.
 make_perspective :: (fov_radians: float32, aspect: float32, near_plane: float32, far_plane: float32) -> Mat4 {
     f := 1.0 / tan(fov_radians * 0.5);
     mat := Mat4.identity();
     mat.cells[0][0] = f / aspect;
     mat.cells[1][1] = f;
-    mat.cells[2][2] = far_plane / (near_plane - far_plane);
-    mat.cells[2][3] = (far_plane * near_plane) / (near_plane - far_plane);
+    mat.cells[2][2] = near_plane / (far_plane - near_plane);
+    mat.cells[2][3] = (far_plane * near_plane) / (far_plane - near_plane);
     mat.cells[3][2] = -1.0;
     mat.cells[3][3] = 0.0;
     return mat;

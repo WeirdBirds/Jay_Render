@@ -3,6 +3,8 @@ Global_Uniforms :: struct {
     proj:       Mat4;
     resolution: Vec2;
     time:       float32;
+    _padding0:  float32;
+    camera_pos: Vec4;
 }
 
 Object_Data :: struct {
@@ -35,8 +37,8 @@ Descriptor_Data :: struct {
 create_descriptors :: () {
     bindings: [4]VkDescriptorSetLayoutBinding;
 
-    bindings[0] = .{binding = 0, descriptorType = .UNIFORM_BUFFER,         descriptorCount = 1,            stageFlags = .VERTEX_BIT | .FRAGMENT_BIT};
-    bindings[1] = .{binding = 1, descriptorType = .STORAGE_BUFFER,         descriptorCount = 1,            stageFlags = .VERTEX_BIT};
+    bindings[0] = .{binding = 0, descriptorType = .UNIFORM_BUFFER,         descriptorCount = 1,            stageFlags = .VERTEX_BIT | .TESSELLATION_CONTROL_BIT | .TESSELLATION_EVALUATION_BIT | .FRAGMENT_BIT};
+    bindings[1] = .{binding = 1, descriptorType = .STORAGE_BUFFER,         descriptorCount = 1,            stageFlags = .VERTEX_BIT | .FRAGMENT_BIT};
     bindings[2] = .{binding = 2, descriptorType = .STORAGE_BUFFER,         descriptorCount = 1,            stageFlags = .VERTEX_BIT};
     bindings[3] = .{binding = 3, descriptorType = .COMBINED_IMAGE_SAMPLER, descriptorCount = MAX_TEXTURES, stageFlags = .FRAGMENT_BIT};
 
