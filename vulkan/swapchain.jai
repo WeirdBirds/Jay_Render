@@ -8,13 +8,30 @@ Swapchain_Data :: struct {
 }
 
 create_swapchain :: (old_swapchain: VkSwapchainKHR = VK_NULL_HANDLE) {
-    // Query how many formats are available, then fetch only the first one —
-    // Swapchain_Data only stores a single VkSurfaceFormatKHR.
     formatCount: u32 = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(render_app.physical_device, render_app.surface, *formatCount, null);
-    formatCount = 1;
-    vkGetPhysicalDeviceSurfaceFormatsKHR(render_app.physical_device, render_app.surface, *formatCount, *render_app.swapchain_data.surfaceFormat);
-    render_app.swapchain_data.surfaceFormat.format = ifx render_app.swapchain_data.surfaceFormat.format == .UNDEFINED then .B8G8R8A8_UNORM else render_app.swapchain_data.surfaceFormat.format;
+
+    formats: [MAX_SURFACE_FORMAT_COUNT]VkSurfaceFormatKHR;
+    formatCount = min(formatCount, MAX_SURFACE_FORMAT_COUNT);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(render_app.physical_device, render_app.surface, *formatCount, formats.data);
+
+    chosen_format := formats[0];
+
+    if chosen_format.format == .UNDEFINED {
+        chosen_format.format     = .B8G8R8A8_SRGB;
+        chosen_format.colorSpace = .COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    } else {
+        for index: 0..formatCount - 1 {
+            format := formats[index];
+            if format.format == .B8G8R8A8_SRGB && format.colorSpace == .COLOR_SPACE_SRGB_NONLINEAR_KHR {
+                chosen_format = format;
+                break;
+            }
+        }
+    }
+
+    render_app.swapchain_data.surfaceFormat = chosen_format;
+    log("Swapchain surface format: % / %", chosen_format.format, chosen_format.colorSpace);
 
     presentModeCount: u32 = 0;
     vkGetPhysicalDeviceSurfacePresentModesKHR(render_app.physical_device, render_app.surface, *presentModeCount, null);
@@ -121,6 +138,7 @@ recreate_swapchain :: () {
 
     // Reset frame index so we start clean with fence[0]
     render_app.render_data.frame_index = 0;
+    reset_gpu_timing_history();
 
     render_app.framebuffer_resized     = false;
 
@@ -130,6 +148,7 @@ recreate_swapchain :: () {
 #scope_file
 
 MAX_PRESENT_MODE_COUNT :: 6; // At the moment in spec
+MAX_SURFACE_FORMAT_COUNT :: 16;
 
 PRESENT_MODE_MAILBOX_IMAGE_COUNT: u32: 3;
 PRESENT_MODE_DEFAULT_IMAGE_COUNT: u32: 2;

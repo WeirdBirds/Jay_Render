@@ -55,6 +55,18 @@ create_device :: () {
 
     render_app.q_indices = q_ids;
 
+    graphics_timestamps_supported := queue_family_properties[xx q_ids.graphics].timestampValidBits > 0;
+    selected_props: VkPhysicalDeviceProperties;
+    vkGetPhysicalDeviceProperties(render_app.physical_device, *selected_props);
+
+    render_app.gpu_timing.timestamp_period_ns = cast(float64) selected_props.limits.timestampPeriod;
+    render_app.gpu_timing.enabled             = selected_props.limits.timestampComputeAndGraphics != VK_FALSE && graphics_timestamps_supported;
+
+    if render_app.gpu_timing.enabled {
+        log("GPU timestamps enabled: period=% ns", render_app.gpu_timing.timestamp_period_ns);
+    } else {
+        log("GPU timestamps unavailable on graphics queue; GPU pass timings disabled");
+    }
     queue_infos: [3]VkDeviceQueueCreateInfo; 
 
     // GRAPHICS QUEUES
@@ -161,7 +173,7 @@ get_suitable_device :: (device_handles: [] VkPhysicalDevice, count: u32) -> s64 
     vkGetPhysicalDeviceProperties(device_handles[best_device_id], *selected_props);
     selected_name := to_string(selected_props.deviceName.data);
     log("Selected device: % (type: %)", selected_name, selected_props.deviceType);
-    
+     
     return best_device_id;
 }
 

@@ -13,11 +13,12 @@ Jay_Render :: struct {
         default_logger = context.logger;
 
         #if OS == .LINUX {
-            if (!LINUX_RENDERDOC && SDL_getenv("WAYLAND_DISPLAY")) {
-                COMPOSER = .WAYLAND;
+            if should_prefer_wayland() {
                 SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland");
+                log("Requested SDL video driver: wayland");
             } else {
-                COMPOSER = .X11;
+                SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11");
+                log("Requested SDL video driver: x11");
             }
         }
 
@@ -26,6 +27,9 @@ Jay_Render :: struct {
         render_app.frame_size = .{ 1600, 800 };
 
         render_app.window     = SDL_CreateWindow("Hello Sailor", xx render_app.frame_size.width, xx render_app.frame_size.height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+
+        #if OS == .LINUX
+            update_linux_composer_from_sdl();
 
         init_vulkan();
     }
@@ -148,6 +152,7 @@ Render_App :: struct {
     sampler:          VkSampler;
     post_sampler:     VkSampler;
     post_framebuffer: Texture;
+    gpu_timing:       Gpu_Timing_Data;
     textures:         []Texture;
     texture_count:    u32;
 }
@@ -164,3 +169,27 @@ Queue_Set :: struct {
 }
 
 render_app := Render_App.{};
+
+
+#scope_file
+
+should_prefer_wayland :: () -> bool {
+    if LINUX_RENDERDOC
+    return false;
+
+    return SDL_getenv("WAYLAND_DISPLAY") != null;
+}
+
+update_linux_composer_from_sdl :: () {
+    driver := to_string(SDL_GetCurrentVideoDriver());
+
+    if driver == "wayland" {
+        COMPOSER = .WAYLAND;
+    } else if driver == "x11" {
+        COMPOSER = .X11;
+    } else {
+        COMPOSER = .UNKNOWN;
+    }
+
+    log("SDL active video driver: %", driver);
+}

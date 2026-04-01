@@ -1,10 +1,17 @@
 create_surface :: () {
     #if OS == .LINUX {
         props := SDL_GetWindowProperties(render_app.window);
+        driver := to_string(SDL_GetCurrentVideoDriver());
 
-        driver: string = to_string(SDL_GetCurrentVideoDriver());
+        if driver == "wayland" {
+            COMPOSER = .WAYLAND;
+        } else if driver == "x11" {
+            COMPOSER = .X11;
+        } else {
+            COMPOSER = .UNKNOWN;
+        }
 
-        log("SDL: Video deiver: %", driver);
+        log("SDL active video driver: %", driver);
 
         if COMPOSER == .WAYLAND {
             surface_info := VkWaylandSurfaceCreateInfoKHR.{};
@@ -28,7 +35,7 @@ create_surface :: () {
 
         if COMPOSER == .X11 {
             surface_info := VkXlibSurfaceCreateInfoKHR.{};
-            surface_info.dpy = xx SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, null);
+            surface_info.dpy    = xx SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, null);
             surface_info.window = xx SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
 
             if surface_info.dpy == null {
@@ -49,6 +56,9 @@ create_surface :: () {
 
             return;
         }
+
+        log_error("Unsupported SDL video driver for Vulkan surface creation: %", to_string(SDL_GetCurrentVideoDriver()));
+        exit(1);
     }
 }
 

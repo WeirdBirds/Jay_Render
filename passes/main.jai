@@ -64,6 +64,7 @@ main_pass :: (cmd: VkCommandBuffer, index: s64, extent: VkExtent2D,
     globals.time       = 0;
     globals._padding0  = 0;
     globals.camera_pos = .{camera_pos.x, camera_pos.y, camera_pos.z, 0};
+    globals.world_data = .{cast(float32) WORLD_SIZE, cast(float32) WORLD_HEIGHT, WORLD_HALF_X, 0};
     memcpy(render_app.descriptor_data.global_ubo_mapped[index], *globals, size_of(Global_Uniforms));
 
     object_data: Object_Data = .{

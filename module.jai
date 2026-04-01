@@ -11,4 +11,4 @@
 #load "common/camera.jai";
 
 DEBUG :: true;
-LINUX_RENDERDOC :: false;
+LINUX_RENDERDOC :: true;

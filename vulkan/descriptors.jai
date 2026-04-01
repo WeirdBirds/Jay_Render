@@ -5,6 +5,7 @@ Global_Uniforms :: struct {
     time:       float32;
     _padding0:  float32;
     camera_pos: Vec4;
+    world_data: Vec4;
 }
 
 Object_Data :: struct {

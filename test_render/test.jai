@@ -55,7 +55,7 @@ cube_mesh: Mesh : {
     ]
 };
 
-WORLD_SIZE   :: 4096;
+WORLD_SIZE   :: 2048;
 WORLD_HEIGHT :: 512;
 MAX_DEPTH_BUCKETS :: 1024;
 
@@ -221,6 +221,7 @@ Test_Render :: struct {
         render_app.render_data.frame_index += 1;
         index := render_app.render_data.frame_index % FRAME_COUNT;
         vkWaitForFences(render_app.device, 1, *render_app.render_data.frame_fences[index], VK_TRUE, u64_high);
+        gpu_timing_collect(index);
 
         imageIndex:       u32;
         acquire_result := vkAcquireNextImageKHR(render_app.device, render_app.swapchain_data.swapchain, u64_high, render_app.render_data.image_available_semaphores[index], VK_NULL_HANDLE, *imageIndex);
@@ -244,6 +245,7 @@ Test_Render :: struct {
 
         cmd := render_app.cmd_buffers.graphics[index];
         extent := render_app.swapchain_data.swapchainExtent;
+        gpu_timing_mark_frame_start(cmd, index);
 
         aspect := cast(float32)extent.width / cast(float32)extent.height;
 
@@ -251,8 +253,12 @@ Test_Render :: struct {
         clearColor.color._float32 = float.[ 0.1, 0.1, 0.1, 1.0 ];
 
         compute_pass(cmd, index, aspect);
+        gpu_timing_mark_after_compute(cmd, index);
         main_pass(cmd, index, extent, aspect, clearColor);
+        gpu_timing_mark_after_main(cmd, index);
         post_pass(cmd, index, imageIndex, extent, clearColor);
+        gpu_timing_mark_after_post(cmd, index);
+        gpu_timing_mark_frame_end(cmd, index);
 
         vkEndCommandBuffer(render_app.cmd_buffers.graphics[index]);
 
