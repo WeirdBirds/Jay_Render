@@ -85,6 +85,6 @@ compute_pass :: (cmd: VkCommandBuffer, index: s64, aspect: float32) {
 
     compute_barrier(cmd,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
-                    VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+                    VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT,
+                    VK_ACCESS_2_INDEX_READ_BIT);
 }

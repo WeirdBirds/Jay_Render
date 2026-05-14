@@ -52,7 +52,7 @@ main_pass :: (cmd: VkCommandBuffer, index: s64, extent: VkExtent2D,
     vertex_buffers: [1]VkBuffer = .[ render_app.vertex_buffer.buffer ];
     offsets:        [1]u64      = .[ 0 ];
     vkCmdBindVertexBuffers(cmd, 0, 1, vertex_buffers.data, offsets.data);
-    vkCmdBindIndexBuffer(cmd, render_app.index_buffer.buffer, 0, .UINT32);
+    vkCmdBindIndexBuffer(cmd, render_app.descriptor_data.sorted_index_buffers[index].buffer, 0, .UINT32);
 
     projection := get_projection_matrix(camera, aspect);
     view := get_view_matrix(camera);
@@ -77,8 +77,7 @@ main_pass :: (cmd: VkCommandBuffer, index: s64, extent: VkExtent2D,
     vkCmdBindDescriptorSets(cmd, .GRAPHICS, render_app.pipeline_data.pipeline_layout,
                             0, 1, *render_app.descriptor_data.sets[index], 0, null);
 
-    vkCmdDrawIndexedIndirect(cmd, render_app.descriptor_data.indirect_buffers[index].buffer,
-                             0, xx TOTAL_PLANES, xx size_of(VkDrawIndexedIndirectCommand));
+    vkCmdDrawIndexed(cmd, xx TOTAL_INDEX_COUNT, 1, 0, 0, 0);
 
     vkCmdEndRendering(cmd);
 

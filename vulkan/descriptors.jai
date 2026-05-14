@@ -17,22 +17,22 @@ MAX_OBJECTS_PER_FRAME :: 1;
 MAX_TEXTURES          :: 4096;
 
 Descriptor_Data :: struct {
-    set_layout:         VkDescriptorSetLayout;
-    pool:               VkDescriptorPool;
-    sets:               [FRAME_COUNT]VkDescriptorSet;
-    compute_set_layout: VkDescriptorSetLayout;
-    compute_sets:       [FRAME_COUNT]VkDescriptorSet;
-    global_ubos:        [FRAME_COUNT]GPU_Buffer;
-    global_ubo_mapped:  [FRAME_COUNT]*void;
-    object_ssbos:       [FRAME_COUNT]GPU_Buffer;
-    object_ssbo_mapped: [FRAME_COUNT]*void;
-    visible_instances:  [FRAME_COUNT]GPU_Buffer;
-    bucket_counts:      [FRAME_COUNT]GPU_Buffer;
-    bucket_heads:       [FRAME_COUNT]GPU_Buffer;
-    indirect_buffers:   [FRAME_COUNT]GPU_Buffer;
+    set_layout:           VkDescriptorSetLayout;
+    pool:                 VkDescriptorPool;
+    sets:                 [FRAME_COUNT]VkDescriptorSet;
+    compute_set_layout:   VkDescriptorSetLayout;
+    compute_sets:         [FRAME_COUNT]VkDescriptorSet;
+    global_ubos:          [FRAME_COUNT]GPU_Buffer;
+    global_ubo_mapped:    [FRAME_COUNT]*void;
+    object_ssbos:         [FRAME_COUNT]GPU_Buffer;
+    object_ssbo_mapped:   [FRAME_COUNT]*void;
+    visible_instances:    [FRAME_COUNT]GPU_Buffer;
+    bucket_counts:        [FRAME_COUNT]GPU_Buffer;
+    bucket_heads:         [FRAME_COUNT]GPU_Buffer;
+    sorted_index_buffers: [FRAME_COUNT]GPU_Buffer;
 
-    post_set_layout:    VkDescriptorSetLayout;
-    post_set:           VkDescriptorSet;
+    post_set_layout:      VkDescriptorSetLayout;
+    post_set:             VkDescriptorSet;
 }
 
 create_descriptors :: () {
@@ -116,10 +116,10 @@ create_descriptors :: () {
         render_app.descriptor_data.object_ssbos[it] = create_buffer(size_of(Object_Data) * MAX_OBJECTS_PER_FRAME, .STORAGE_BUFFER_BIT, .HOST_VISIBLE_BIT | .HOST_COHERENT_BIT);
         vkMapMemory(render_app.device, render_app.descriptor_data.object_ssbos[it].memory, 0, xx (size_of(Object_Data) * MAX_OBJECTS_PER_FRAME), 0, *render_app.descriptor_data.object_ssbo_mapped[it]);
 
-        render_app.descriptor_data.visible_instances[it] = create_buffer(size_of(u32) * MAX_VISIBLE_INSTANCES, .STORAGE_BUFFER_BIT, .DEVICE_LOCAL_BIT);
-        render_app.descriptor_data.bucket_counts[it]     = create_buffer(size_of(u32) * MAX_DEPTH_BUCKETS, .STORAGE_BUFFER_BIT, .DEVICE_LOCAL_BIT);
-        render_app.descriptor_data.bucket_heads[it]      = create_buffer(size_of(u32) * MAX_DEPTH_BUCKETS, .STORAGE_BUFFER_BIT, .DEVICE_LOCAL_BIT);
-        render_app.descriptor_data.indirect_buffers[it]  = create_buffer(size_of(VkDrawIndexedIndirectCommand) * TOTAL_PLANES, .STORAGE_BUFFER_BIT | .INDIRECT_BUFFER_BIT, .DEVICE_LOCAL_BIT);
+        render_app.descriptor_data.visible_instances[it]    = create_buffer(size_of(u32) * MAX_VISIBLE_INSTANCES, .STORAGE_BUFFER_BIT, .DEVICE_LOCAL_BIT);
+        render_app.descriptor_data.bucket_counts[it]        = create_buffer(size_of(u32) * MAX_DEPTH_BUCKETS, .STORAGE_BUFFER_BIT, .DEVICE_LOCAL_BIT);
+        render_app.descriptor_data.bucket_heads[it]         = create_buffer(size_of(u32) * MAX_DEPTH_BUCKETS, .STORAGE_BUFFER_BIT, .DEVICE_LOCAL_BIT);
+        render_app.descriptor_data.sorted_index_buffers[it] = create_buffer(size_of(u32) * TOTAL_INDEX_COUNT, .STORAGE_BUFFER_BIT | .INDEX_BUFFER_BIT, .DEVICE_LOCAL_BIT);
     }
 
     for 0..FRAME_COUNT - 1 {
@@ -133,14 +133,14 @@ create_descriptors :: () {
         ];
         vkUpdateDescriptorSets(render_app.device, writes.count, writes.data, 0, null);
 
-        bucket_counts_info: VkDescriptorBufferInfo = .{buffer = render_app.descriptor_data.bucket_counts[it].buffer,    offset = 0, range = xx (size_of(u32) * MAX_DEPTH_BUCKETS)};
-        bucket_heads_info: VkDescriptorBufferInfo = .{buffer = render_app.descriptor_data.bucket_heads[it].buffer,     offset = 0, range = xx (size_of(u32) * MAX_DEPTH_BUCKETS)};
-        indirect_info: VkDescriptorBufferInfo = .{buffer = render_app.descriptor_data.indirect_buffers[it].buffer, offset = 0, range = xx (size_of(VkDrawIndexedIndirectCommand) * TOTAL_PLANES)};
+        bucket_counts_info: VkDescriptorBufferInfo = .{buffer = render_app.descriptor_data.bucket_counts[it].buffer,        offset = 0, range = xx (size_of(u32) * MAX_DEPTH_BUCKETS)};
+        bucket_heads_info: VkDescriptorBufferInfo = .{buffer = render_app.descriptor_data.bucket_heads[it].buffer,         offset = 0, range = xx (size_of(u32) * MAX_DEPTH_BUCKETS)};
+        sorted_index_info: VkDescriptorBufferInfo = .{buffer = render_app.descriptor_data.sorted_index_buffers[it].buffer, offset = 0, range = xx (size_of(u32) * TOTAL_INDEX_COUNT)};
         compute_writes: [4]VkWriteDescriptorSet = .[
             .{dstSet = render_app.descriptor_data.compute_sets[it], dstBinding = 0, dstArrayElement = 0, descriptorType = .STORAGE_BUFFER, descriptorCount = 1, pBufferInfo = *visible_info},
             .{dstSet = render_app.descriptor_data.compute_sets[it], dstBinding = 1, dstArrayElement = 0, descriptorType = .STORAGE_BUFFER, descriptorCount = 1, pBufferInfo = *bucket_counts_info},
             .{dstSet = render_app.descriptor_data.compute_sets[it], dstBinding = 2, dstArrayElement = 0, descriptorType = .STORAGE_BUFFER, descriptorCount = 1, pBufferInfo = *bucket_heads_info},
-            .{dstSet = render_app.descriptor_data.compute_sets[it], dstBinding = 3, dstArrayElement = 0, descriptorType = .STORAGE_BUFFER, descriptorCount = 1, pBufferInfo = *indirect_info},
+            .{dstSet = render_app.descriptor_data.compute_sets[it], dstBinding = 3, dstArrayElement = 0, descriptorType = .STORAGE_BUFFER, descriptorCount = 1, pBufferInfo = *sorted_index_info},
         ];
         vkUpdateDescriptorSets(render_app.device, compute_writes.count, compute_writes.data, 0, null);
     }
@@ -164,7 +164,7 @@ destroy_descriptors :: () {
         destroy_buffer(*render_app.descriptor_data.visible_instances[it]);
         destroy_buffer(*render_app.descriptor_data.bucket_counts[it]);
         destroy_buffer(*render_app.descriptor_data.bucket_heads[it]);
-        destroy_buffer(*render_app.descriptor_data.indirect_buffers[it]);
+        destroy_buffer(*render_app.descriptor_data.sorted_index_buffers[it]);
     }
 
     vkDestroyDescriptorPool(render_app.device, render_app.descriptor_data.pool, null);
