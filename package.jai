@@ -1,25 +1,3 @@
-
-Renderer :: struct {
-    sdl_window:           *SDL_Window;
-    window_type:          Native_Window_Type;
-    queues:               Queues;
-    square_pipeline:      Gpu_Pipeline;
-    square_arena:         Gpu_Arena;
-    square_vertex_params: Gpu_Ptr;
-    square_pixel_data:    Gpu_Ptr;
-    square_index_data:    Gpu_Ptr;
-    frames_rendered:      u64;
-    framebuffer_resized:  bool;
-}
-
-Queues :: struct {
-    main:     Gpu_Queue;
-    compute:  Gpu_Queue;
-    transfer: Gpu_Queue;
-}
-
-render: Renderer = {};
-
 Jay_Render :: struct {
 
     after:  Lifecycle.SimulationComplete;
@@ -40,6 +18,14 @@ Jay_Render :: struct {
                 render.window_type = .X11;
                 log("Requested SDL video driver: x11");
             }
+
+            
+            #if DEBUG {
+                
+                SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11");
+                render.window_type = .X11;
+                log("Requested SDL video driver: x11");
+            }
         }
 
         SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
@@ -54,73 +40,38 @@ Jay_Render :: struct {
             gpu_init_swapchain(display, surface, render.window_type);
         } else {
             window_handle := cast(u64) SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
-            gpu_init_swapchain(window_handle, render.window_type);
+            gpu_init_swapchain(window_handle, render.window_type, .[]);
         }
 
         render.queues.main     = gpu_get_queue(.MAIN, 0);
         render.queues.compute  = gpu_get_queue(.COMPUTE, 0);
         render.queues.transfer = gpu_get_queue(.TRANSFER, 0);
 
+        render.data = render_init();
+
         shader_vfs := make_shader_vfs(get_shader);
         defer cleanup_shader_vfs(shader_vfs);
+  
+        create_pipelines(*render.data, shader_vfs);
 
-        ok_v, vs := compile_shader("/shaders/test_vs.slang", file_system = shader_vfs);
-        defer free(vs.data);
-        ok_f, fs := compile_shader("/shaders/test_fs.slang", file_system = shader_vfs);
-        defer free(fs.data);
+        create_depth_buffer();
 
-        clear_asset_registry(Shader_Text);
+        log("Jay_Render started");
+        
+    }
 
-        blend_desc: Gpu_Blend_Desc;
-        raster_desc: Gpu_Raster_Desc = .{
-            cull = .CW,
-            color_targets = .[
-                .{format = .B8G8R8A8_UNORM}
-            ],
-            blend_state = *blend_desc,
-        };
+    begin :: (engine: *Engine) { 
+        mesh := get_asset(Mesh_Data, "/meshes/cow.obj");
+        mesh_id := gpu_upload_mesh(*render.data, mesh);
+        render.data.materials_cpu[0] = Material_GPU.{ base_color = Vec4.{x=0.8, y=0.3, z=0.2, w=1}, texture_index = 0, sampler_index = 0, flags = 0 };
+        gid := new_draw_group(*render.data, mesh_id, 0);
+        for i: 0..100 {
+            for j: 0..100 {
+               new_mesh_instance(*render.data, gid, scale(make_translation(Vec3.{xx (i-50), xx (j-50), 0}), Vec3.new(0.1)), Vec4.{x=0, y=0, z=0, w=10});
+            }
+        }
+        log("Assets loaded");
 
-        render.square_pipeline = gpu_create_graphics_pipeline(vs, fs, raster_desc);
-
-        // Allocate GPU arena for square vertex+color+index data.
-        render.square_arena = gpu_make_arena(1024);
-
-        // 4 vertex positions: float2 each (top-left origin, NDC space)
-        Vertex2D :: struct { x: float; y: float; }
-        vertex_buffer, vertex_gpu := gpu_arena_alloc(*render.square_arena, [4] Vertex2D);
-        vertex_buffer.* = .[
-            .{ 0.5,   0.5 },
-            .{ 0.5,  -0.5 },
-            .{ -0.5, -0.5 },
-            .{ -0.5, +0.5 },
-        ];
-
-        // 4 vertex colors: float3 each (RGB, 12 floats total)
-        vertex_colors, colors_gpu := gpu_arena_alloc(*render.square_arena, [12] float);
-        vertex_colors.* = .[
-            1., 0., 0.,    // red
-            0., 1., 0.,    // green
-            0., 0., 1.,    // blue
-            1., 1., 1.,    // white
-        ];
-
-        // Vertex push-constant block: [positions_gpu_ptr, colors_gpu_ptr]
-        param_block, vertex_params_gpu := gpu_arena_alloc(*render.square_arena, [2] Gpu_Ptr);
-        param_block.* = .[vertex_gpu, colors_gpu];
-        render.square_vertex_params = vertex_params_gpu;
-
-        // Pixel push-constant data (unused, but pipeline expects it).
-        pixel_data, pixel_gpu := gpu_arena_alloc(*render.square_arena, [3] float);
-        pixel_data.* = .[1., 0., 1.];
-        render.square_pixel_data = pixel_gpu;
-
-        // 6 indices for 2 triangles forming a quad.
-        index_buffer, index_gpu := gpu_arena_alloc(*render.square_arena, [6] u32);
-        index_buffer.* = .[
-            0, 3, 1,
-            1, 3, 2,
-        ];
-        render.square_index_data = index_gpu;
     }
 
     before_tick :: (engine: *Engine) {
@@ -147,40 +98,48 @@ Jay_Render :: struct {
     }
 
     after_tick :: (engine: *Engine) {
+        
+        w, h: s32;
+        SDL_GetWindowSize(render.sdl_window, *w, *h);
+
         if render.framebuffer_resized {
-            gpu_swapchain_resize();
+            
+
+            if w <= 0 || h <= 0 {
+                return;
+            }
+
+            log("new window size: %x%", w, h);
+            gpu_wait_idle();
+            gpu_swapchain_resize(xx w, xx h);
+            recreate_depth_buffer();
             render.framebuffer_resized = false;
         }
-
+         
         acquire_result, swapchain_image := gpu_swapchain_acquire();
-        if acquire_result != .SUCCESS || !swapchain_image {
-            return;
-        }
+        if acquire_result != .SUCCESS || !swapchain_image { return; }
+        render.viewport.image = swapchain_image;
 
-        record_result, cmd_buff := gpu_start_command_recording(render.queues.main);
-        if record_result != .SUCCESS {
-            return;
-        }
+        camera: Camera;
+        camera.aspect_ratio = cast(float32)w/h;
+        // camera.fov *= 2;
+        camera.target = *render.viewport;
 
-        render_desc := Gpu_Render_Pass_Desc.{
-            color_targets = .[
-                .{
-                    view = swapchain_image,
-                    load_op = .CLEAR,
-                    store_op = .STORE,
-                    clear_color._float = .[0, 0, 0, 1],
-                }
-            ]
-        };
-        gpu_begin_render_pass(cmd_buff, render_desc);
-        gpu_set_depth_stencil_state(cmd_buff, .{depth_test = .NEVER, depth_mode = .NONE});
+        sin_t :float32 = xx sin(engine.timer.time);
 
-        gpu_set_pipeline(cmd_buff, render.square_pipeline);
-        gpu_draw_indexed_instanced(cmd_buff, render.square_vertex_params, render.square_pixel_data, render.square_index_data, 6, 1);
+        transform := to_matrix (Transform.{
+            translation = Vec3.{-3, -3, 3}, 
+            rotation = to_quat(Euler.{
+                0,
+                (-45 * sin_t) - 45,
+                45
+            }), 
+            scale = Vec3.new(1)
+        });
 
-        gpu_end_render_pass(cmd_buff);
-        gpu_submit_and_present(cmd_buff);
+        log("%", 1/engine.timer.delta_time);
 
+        camera_capture(camera, transform);
         render.frames_rendered += 1;
     }
 
@@ -188,27 +147,16 @@ Jay_Render :: struct {
         log("\nShutting Jay_Render down!");
 
         gpu_wait_idle();
-        gpu_free_arena(render.square_arena);
-        gpu_free_pipeline(render.square_pipeline);
-        SDL_DestroyWindow(render.sdl_window);
+
+        destroy_depth_buffer();
+        
         gpu_destroy_swapchain();
         gpu_shutdown();
 
+        clear_asset_registry();
+
+        SDL_DestroyWindow(render.sdl_window);
+        
         log("Bye!\n");
     }
-}
-
-
-get_window_type :: () -> Native_Window_Type {
-    driver := to_string(SDL_GetCurrentVideoDriver());
-
-    if driver == {
-        case "x11"; return .X11;
-        case "wayland"; return .WAYLAND;
-        case "cocoa"; return .COCOA;
-        case "windows"; return .WIN32;
-        case; log_error("Unknown video driver: %", driver);
-    };
-
-    return .UNKNOWN;
 }
