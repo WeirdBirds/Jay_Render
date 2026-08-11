@@ -4,10 +4,8 @@ Mesh_Flags :: enum_flags u64 {
 
 Mesh_Instance :: struct {
     mesh_id:     u32;
-    material_id: u32;
     flags:       u32;
-    padding0:    u32;
-
+    material: Gpu_Ptr;
 }
 
 Mesh_GPU :: struct {
@@ -48,9 +46,8 @@ new_mesh_instance :: (
 
     data.instances_cpu[instance_id] = .{
         mesh_id = group.mesh_id,
-        material_id = group.material_id,
         flags = 0,
-        padding0 = 0,
+        material = group.material
     };
 
     data.bounds_cpu[instance_id] = .{
@@ -61,6 +58,11 @@ new_mesh_instance :: (
 
     return instance_id;
 }
+
+destroy_mesh_instace :: (render_data: *Render_Data, instance: u32) {
+    free_index(render_data.instance_pool);
+}
+
 gpu_upload_mesh :: (data: *Render_Data, mesh: Mesh_Data) -> u32 {
     mesh_id := get_index(*data.mesh_pool);
 

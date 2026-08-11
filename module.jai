@@ -19,14 +19,19 @@
 #load "pipelines.jai";
 #load "frame.jai";
 #load "package.jai";
+#load "material.jai";
+
+#load "ecs.jai";
 
 DEBUG :: true;
 
+MAX_FRAMES_IN_FLIGHT :: 3;
+
 MAX_INSTANCES :: 262144;
 MAX_MESHES    :: 65536;
-MAX_MATERIALS :: 65536;
 MAX_GROUPS    :: 65536;
 MAX_DRAWS     :: MAX_GROUPS;
 
 VERTICES_BUDGET :: 512 * MiB;
 INDICES_BUDGET :: 128 * MiB;
+MATERIAL_BUDGET :: 128 * MiB;

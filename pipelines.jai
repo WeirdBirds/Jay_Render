@@ -1,21 +1,21 @@
-create_pipelines :: (data: *Render_Data, shader_vfs: *Shader_VFS) {
-    ok_r,  reset_spv   := compile_shader("/shaders/compute/reset.slang",      file_system = shader_vfs);
-    ok_c,  cull_spv    := compile_shader("/shaders/compute/count_cull.slang", file_system = shader_vfs);
-    ok_p,  prefix_spv  := compile_shader("/shaders/compute/prefix.slang",     file_system = shader_vfs);
-    ok_s,  scatter_spv := compile_shader("/shaders/compute/scatter.slang",    file_system = shader_vfs);
-    ok_b,  build_spv   := compile_shader("/shaders/compute/build_draws.slang", file_system = shader_vfs);
-    ok_vs, vs_spv      := compile_shader("/shaders/vertex/opaque.slang",      file_system = shader_vfs);
-    ok_fs, fs_spv      := compile_shader("/shaders/fragment/opaque.slang",    file_system = shader_vfs);
+create_pipelines :: (data: *Render_Data) {
+    reset_spv   := get_asset(Shader_Data, "/shaders/compute/reset.slang");
+    cull_spv    := get_asset(Shader_Data, "/shaders/compute/count_cull.slang");
+    prefix_spv  := get_asset(Shader_Data, "/shaders/compute/prefix.slang");
+    scatter_spv := get_asset(Shader_Data, "/shaders/compute/scatter.slang");
+    build_spv   := get_asset(Shader_Data, "/shaders/compute/build_draws.slang");
+    vs_spv      := get_asset(Shader_Data, "/shaders/vertex/opaque.slang");
+    fs_spv      := get_asset(Shader_Data, "/shaders/fragment/opaque.slang");
 
-    assert(ok_r && ok_c && ok_p && ok_s && ok_b && ok_vs && ok_fs);
+    assert(reset_spv && cull_spv && prefix_spv && scatter_spv && build_spv && vs_spv && fs_spv, "One of shaders are not loaded");
 
     log("All shaders compiled.");
 
-    data.pipelines[0] = gpu_create_compute_pipeline(reset_spv);
-    data.pipelines[1] = gpu_create_compute_pipeline(cull_spv);
-    data.pipelines[2] = gpu_create_compute_pipeline(prefix_spv);
-    data.pipelines[3] = gpu_create_compute_pipeline(scatter_spv);
-    data.pipelines[4] = gpu_create_compute_pipeline(build_spv);
+    data.pipelines[0] = gpu_create_compute_pipeline(reset_spv.code_words);
+    data.pipelines[1] = gpu_create_compute_pipeline(cull_spv.code_words);
+    data.pipelines[2] = gpu_create_compute_pipeline(prefix_spv.code_words);
+    data.pipelines[3] = gpu_create_compute_pipeline(scatter_spv.code_words);
+    data.pipelines[4] = gpu_create_compute_pipeline(build_spv.code_words);
 
     blend: Gpu_Blend_Desc = {};
 
@@ -26,5 +26,5 @@ create_pipelines :: (data: *Render_Data, shader_vfs: *Shader_VFS) {
         blend_state = *blend
     };
 
-    data.pipelines[5] = gpu_create_graphics_pipeline(vs_spv, fs_spv, raster);
+    data.pipelines[5] = gpu_create_graphics_pipeline(vs_spv.code_words, fs_spv.code_words, raster);
 }

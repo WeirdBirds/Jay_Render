@@ -23,7 +23,7 @@ camera_capture :: (camera: Camera, transform: Mat4) {
     view_projection := p * v;
 
     frustum_planes := get_frustum_planes(view_projection); 
-    render_frame(*render.data, render.queues.main, camera.target.image, camera.target.depth, view_projection, frustum_planes);
+    render_frame(*render.data, render.queues.main, render.queues.compute, camera.target.image, camera.target.depth, view_projection, frustum_planes);
 }
 
 make_projection :: (using camera: Camera) -> Mat4 {
@@ -115,7 +115,7 @@ get_frustum_planes :: (vp: Mat4) -> [6] Vec4 {
     for *p: planes {
         len := sqrt(p.x*p.x + p.y*p.y + p.z*p.z);
         if len > 0.000001 {
-            p.x /= len;  p.y /= len;  p.z /= len;
+            p.x /= len;  p.y /= len;  p.z /= len;  p.w /= len;
         }
     }
 

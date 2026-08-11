@@ -3,5 +3,4 @@ Material_GPU :: struct {
     texture_index: u32;
     sampler_index: u32;
     flags: u32;
-    padding0: u32;
 }
