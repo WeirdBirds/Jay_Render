@@ -61,15 +61,29 @@ Jay_Render :: struct {
         mesh := get_asset(Mesh_Data, "/meshes/cow.obj");
         mesh_id := gpu_upload_mesh(*render.data, mesh);
 
-        render.data.materials_cpu[0] = Material_GPU.{ base_color = Vec4.{x=0.8, y=0.3, z=0.2, w=1}, texture_index = 0, sampler_index = 0, flags = 0 };
-        render.data.materials_cpu[1] = Material_GPU.{ base_color = Vec4.{x=0.3, y=0.8, z=0.2, w=1}, texture_index = 0, sampler_index = 0, flags = 0 };
-        render.data.materials_cpu[2] = Material_GPU.{ base_color = Vec4.{x=0.2, y=0.3, z=0.8, w=1}, texture_index = 0, sampler_index = 0, flags = 0 };
+        colors := Vec4.[
+            .{x=0.8, y=0.3, z=0.2, w=1},
+            .{x=0.3, y=0.8, z=0.2, w=1},
+            .{x=0.2, y=0.3, z=0.8, w=1},
+        ];
+
+        material_gpu: [3] Gpu_Ptr;
+        for i: 0..2 {
+            ctx: #Context;
+            push_context ctx {
+                context.allocator = render.data.material_allocator;
+                mat := New(Material_GPU);
+                assert(mat != null);
+                mat.* = .{ base_color = colors[i], texture_index = 0, sampler_index = 0, flags = 0 };
+                material_gpu[i] = to_gpu_ptr(render.data.material_allocator, mat);
+            }
+        }
         
         gids: [3]u32;
 
-        gids[0] = new_draw_group(*render.data, mesh_id, 0);
-        gids[1] = new_draw_group(*render.data, mesh_id, 1);
-        gids[2] = new_draw_group(*render.data, mesh_id, 2);
+        gids[0] = new_draw_group(*render.data, mesh_id, material_gpu[0]);
+        gids[1] = new_draw_group(*render.data, mesh_id, material_gpu[1]);
+        gids[2] = new_draw_group(*render.data, mesh_id, material_gpu[2]);
 
         for i: 0..100 {
             for j: 0..100 {

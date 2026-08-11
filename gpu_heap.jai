@@ -11,7 +11,7 @@ Gpu_Heap :: (capacity: s64, alignment: s64 = 8, memory_type: Memory_Type = .DEFA
 to_gpu_ptr :: (alloc: Allocator, cpu_ptr: *void) -> Gpu_Ptr {
     heap: *Gpu_Heap_Data = cast(*Gpu_Heap_Data) alloc.data;
     offset := cast(s64) cpu_ptr - cast(s64) heap.cpu_base;                                                                                                          
-    return heap.gpu_base + offset;                                                                                                                                  
+    return heap.gpu_base + offset.(Gpu_Ptr);                                                                                                                                  
 }
 
 gpu_heap_head :: (allocator: Allocator) -> (*void, Gpu_Ptr) {
