@@ -1,67 +1,128 @@
 # Jay_Render
 
-Vulkan forward renderer for the Jay engine. Uses Vulkan 1.3 dynamic rendering, indirect drawing, and per-frame descriptors. Plugs into Jay_Core as a lifecycle package.
+SGPU-backed Vulkan forward renderer for Jay. It uses GPU-driven visibility,
+indirect indexed draws, Slang shaders, SDL3 windows, dynamic rendering, and
+three SGPU-owned frames in flight.
 
-## What it does right now
+`Jay_Render` remains Jay_Core package API. The temporary cow scene in
+`package.jai` is development-only and will later be replaced by ECS scene data.
 
-- Creates a Vulkan 1.3 instance with validation layers (debug) on Linux (Wayland/X11)
-- Picks the best GPU (discrete > integrated > virtual)
-- Sets up a swapchain with mailbox present mode (falls back to FIFO)
-- Renders instanced geometry via a single `vkCmdDrawIndexedIndirect` call
-- Per-frame UBO for camera (view, proj, resolution, time) and SSBO for per-object transforms
-- Depth testing with D32_SFLOAT
-- Shaders written in Slang, compiled to SPIR-V at build time through the asset pipeline
-- Handles window resize (swapchain recreation + depth buffer rebuild)
-- 3 frames in flight with proper fence/semaphore synchronization
+## Import configuration
 
-## How it fits in the engine
+```jai
+#import "Jay_Render"(
+    DEBUG = true,
+    RENDER_CAPTURE = false,
 
-Jay_Render is a package struct that hooks into the Jay_Core lifecycle:
+    MAX_INSTANCES = 262144,
+    MAX_MESHES = 65536,
+    MAX_GROUPS = 65536,
+    MAX_DRAWS = 65536,
 
-- `before_begin` — SDL init, window creation, full Vulkan init
-- `begin` — upload vertex/index buffers to GPU
-- `before_tick` — poll SDL events (quit, resize, scroll)
-- `after_tick` — draw frame, handle out-of-date swapchain
-- `after_end` — destroy GPU resources, shut down Vulkan
-
-It declares `after: Lifecycle.SimulationComplete` and `before: Lifecycle.RenderComplete` so the Mixer knows where to place it relative to other packages.
-
-## File layout
-
-```
-Jay_Render/
-  module.jai          # Imports and loads
-  package.jai         # Package struct, Render_App, lifecycle callbacks
-  camera.jai          # Camera, perspective/view matrices, look-at
-  vulkan.jai          # init_vulkan/deinit_vulkan, loads vulkan/*.jai
-  common/
-    image.jai         # Pixel and Image_Data types
-  vulkan/
-    instance.jai      # VkInstance, debug report callback
-    surface.jai       # VkSurfaceKHR (Wayland/X11)
-    device.jai        # Physical/logical device, queue selection
-    swapchain.jai     # Swapchain create/destroy/recreate
-    depth.jai         # Depth buffer (image + view)
-    image.jai         # Image view helpers
-    callback.jai      # Vulkan debug + error callbacks
-    memory.jai        # GPU_Buffer, create/destroy, staging upload
-    descriptors.jai   # UBO/SSBO layout, descriptor pool/sets, indirect buffer
-    pipeline.jai      # Graphics pipeline (Slang shaders, vertex input, rasterization)
-    shader_module.jai # Shader loading from asset pipeline, registry
-    texture.jai       # Texture struct, image upload, sampler creation
-    render.jai        # Command pools/buffers, sync objects (fences, semaphores)
-  test_render/
-    test.jai          # Cube geometry, camera control, draw_frame()
+    VERTEX_HEAP_BUDGET = 512 * MiB,
+    INDEX_HEAP_BUDGET = 128 * MiB,
+    MATERIAL_HEAP_BUDGET = 128 * MiB,
+    GPU_HEAP_ALIGNMENT = 8,
+    GPU_HEAP_GROWTH_FACTOR = 1.5,
+);
 ```
 
-## Current state
+All limits are compile-time module parameters. Invalid values fail before GPU
+initialization. `MAX_DRAWS` must be at least `MAX_GROUPS`. Different textual
+parameter lists create distinct Jai module instances; use one shared import
+configuration across renderer users.
 
-Phases 1-3 complete (triangle → buffers → descriptors + indirect draw). Working on Phase 4: bindless textures via descriptor indexing.
+SGPU currently fixes frames in flight at three. Jay_Render intentionally keeps
+`MAX_FRAMES_IN_FLIGHT` coupled to that SGPU value.
+
+## Debug, capture, and windows
+
+- `DEBUG` enables SGPU validation layers, debug assertions, markers, and
+  renderer diagnostic logging.
+- `RENDER_CAPTURE` enables SGPU RenderDoc capture support and debug markers.
+- Linux forces X11 when either `DEBUG` or `RENDER_CAPTURE` is enabled. RenderDoc
+  upstream still requires XWayland for reliable Linux frame debugging.
+- Normal Linux runs prefer native Wayland when `WAYLAND_DISPLAY` exists; X11 is
+  fallback.
+- Win32 and Cocoa native-handle paths are compile-time maintained. They are not
+  runtime-validated by this Linux repository.
+
+## Ownership and lifecycle
+
+`Jay_Render` owns its SDL window, SGPU initialization, swapchain, depth target,
+pipelines, renderer semaphore, parameter blocks, persistent arrays, frame
+scratch allocations, index-pool metadata, and GPU heaps.
+
+Lifecycle order:
+
+1. `before_begin`: validate configuration, initialize SGPU and SDL, create the
+   native swapchain, queues, render data, pipelines, and depth target.
+2. `begin`: load current development assets and create cow instances.
+3. `before_tick`: process SDL events.
+4. `after_tick`: recreate swapchain/depth after resize, acquire, cull, build
+   indirect commands, and submit/present.
+5. `after_end`: wait idle, release all renderer-owned resources, destroy
+   swapchain, shut down SGPU, then destroy SDL state.
+
+Startup failure invokes the same guarded shutdown path. Shutdown clears renderer
+state, so partially initialized resources are not reused.
+
+## Contiguous GPU heaps
+
+Vertex, index, and material storage each use one contiguous SGPU-backed
+`VkBuffer`. Heap growth waits for GPU idle, allocates one larger buffer, copies
+mapped bytes, preserves allocation offsets, refreshes root addresses, then frees
+the old buffer.
+
+No heap is segmented. Persistent references are offsets or indices, not durable
+raw GPU addresses:
+
+- mesh vertex and index data use offsets from their heap roots;
+- `Material_Handle` is a packed material-buffer index;
+- each `Mesh_Instance` stores `material_index`;
+- `Fragment_Params.materials` is the one material-buffer root address.
+
+This means material-buffer relocation updates one root address rather than every
+instance. Draw groups contain only mesh identity; material is per instance, so
+same-mesh material variants share one indirect draw group.
+
+Growth is automatic. Shrink is deliberately explicit:
+
+```jai
+renderer_trim_memory();
+```
+
+Call it only at a scene unload, loading screen, or another maintenance boundary.
+It waits for GPU idle, retains allocation offsets, and shrinks only when all live
+allocation data fits. There is no frame-count delay or automatic grow/shrink
+oscillation.
+
+## Compile-time materials
+
+`Material(vertex, fragment)` remains a compile-time metaprogram construct. Its
+`#insert` pass:
+
+1. resolves both shader asset source paths;
+2. creates a Slang virtual filesystem;
+3. compiles both shader stages to SPIR-V, with debug symbols following `DEBUG`;
+4. fails compilation with the offending shader path when Slang fails;
+5. reflects declarations only after successful stage compilation;
+6. frees SPIR-V, reflection, and VFS temporary resources.
+
+Material construction is not runtime reflection or descriptor setup.
+
+## Current renderer path
+
+- Compute reset, cull/count, prefix, scatter, and indirect-draw generation.
+- Indirect indexed drawing with dynamic depth rendering.
+- Per-instance material index lookup in fragment shading.
+- Destroyed instance slots are skipped by culling, allowing index-pool reuse.
+- Resize rebuilds depth state after swapchain resize.
 
 ## Dependencies
 
-- `Jay_Core` (lifecycle, assets, names)
-- `Jay_Vulkan` (Vulkan 1.4.313 bindings)
-- `jai-sdl3` (SDL3 windowing)
-- `Jay_Math` (via Jay_Core — vectors, matrices)
-- `Jay_Logger` (via Jay_Core — logging)
+- Jay_Core
+- Jay_Utils
+- SGPU
+- jai-sdl3
+- Slang compiler support supplied through SGPU

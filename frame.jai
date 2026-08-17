@@ -6,9 +6,11 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     assert(frame_index < MAX_FRAMES_IN_FLIGHT);
     frame := *data.dynamic[frame_index];
 
-    // Per-frame values
-    frame.params.group_count    = data.group_pool.count;
-    frame.params.instance_count = data.instance_pool.count;
+    // Pools reuse holes. Dispatch through their occupied extent and let the
+    // cull pass reject destroyed instance slots.
+    refresh_gpu_roots(data);
+    frame.params.group_count = data.group_pool.max;
+    frame.params.instance_count = data.instance_pool.max;
     frame.params.frustum_planes = frustum_planes;
     frame.vertex_params.view_projection = view_projection;
 
@@ -17,29 +19,29 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
 
     // Pass 1: Reset
     gpu_set_pipeline(compute_cmd, data.pipelines[0]);
-    gg := (data.group_pool.count + 63) / 64;
-    gpu_dispatch(compute_cmd, frame.params_gpu, .[gg, 1, 1]);
+    gg := max(xx 1, (data.group_pool.max + 63) / 64);
+    gpu_dispatch(compute_cmd, frame.params_gpu, u32.[xx gg, 1, 1]);
     gpu_barrier(compute_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
     // Pass 2: Count-Cull
     gpu_set_pipeline(compute_cmd, data.pipelines[1]);
-    ig := (data.instance_pool.count + 63) / 64;
-    gpu_dispatch(compute_cmd, frame.params_gpu, .[ig, 1, 1]);
+    ig := max(xx 1, (data.instance_pool.max + 63) / 64);
+    gpu_dispatch(compute_cmd, frame.params_gpu, u32.[xx ig, 1, 1]);
     gpu_barrier(compute_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
     // Pass 3: Prefix
     gpu_set_pipeline(compute_cmd, data.pipelines[2]);
-    gpu_dispatch(compute_cmd, frame.params_gpu, .[1, 1, 1]);
+    gpu_dispatch(compute_cmd, frame.params_gpu, u32.[1, 1, 1]);
     gpu_barrier(compute_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
     // Pass 4: Scatter
     gpu_set_pipeline(compute_cmd, data.pipelines[3]);
-    gpu_dispatch(compute_cmd, frame.params_gpu, .[ig, 1, 1]);
+    gpu_dispatch(compute_cmd, frame.params_gpu, u32.[xx ig, 1, 1]);
     gpu_barrier(compute_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
     // Pass 5: Build draws
     gpu_set_pipeline(compute_cmd, data.pipelines[4]);
-    gpu_dispatch(compute_cmd, frame.params_gpu, .[gg, 1, 1]);
+    gpu_dispatch(compute_cmd, frame.params_gpu, u32.[xx gg, 1, 1]);
 
     data.compute_done_value += 1;
     compute_done := Gpu_Timeline_Pair.{data.compute_done, data.compute_done_value};
@@ -66,9 +68,6 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     gpu_set_depth_stencil_state(cmd, .{ depth_test = .GREATER, depth_mode = .READ | .WRITE });
 
     _, index_data_gpu := gpu_heap_head(data.index_allocator);
-    _, vertex_data_gpu := gpu_heap_head(data.vertex_allocator);
-
-    frame.vertex_params.vertices = vertex_data_gpu;
 
     gpu_draw_indexed_indirect_count(cmd, frame.vertex_params_gpu, data.fragment_params_gpu,
             index_data_gpu, frame.params.draw_commands,
