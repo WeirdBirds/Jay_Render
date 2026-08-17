@@ -187,7 +187,7 @@ Jay_Render :: struct {
                     *render.data,
                     group_id,
                     transform,
-                    Vec4.new(get_translation(transform), 10),
+                    Vec4.new(get_translation(transform), 0.613),
                     materials[(i + j) % materials.count],
                 );
             }
