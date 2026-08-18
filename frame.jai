@@ -3,7 +3,7 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
         view_projection: Mat4, frustum_planes: [6] Vec4) {
 
     frame_index := gpu_frame_index();
-    assert(frame_index < MAX_FRAMES_IN_FLIGHT);
+    #if DEBUG { assert(frame_index < MAX_FRAMES_IN_FLIGHT); }
     frame := *data.dynamic[frame_index];
 
     // Pools reuse holes. Dispatch through their occupied extent and let the
@@ -15,32 +15,37 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     frame.vertex_params.view_projection = view_projection;
 
     result, compute_cmd := gpu_start_command_recording(compute_queue);
-    assert(result == .SUCCESS);
+    #if DEBUG { assert(result == .SUCCESS); }
 
     // Pass 1: Reset
-    gpu_set_pipeline(compute_cmd, data.pipelines[0]);
+    reset_pipeline_result := gpu_set_pipeline(compute_cmd, data.pipelines[0]);
+    #if DEBUG { assert(reset_pipeline_result == .SUCCESS); }
     gg := max(xx 1, (data.group_pool.max + 63) / 64);
     gpu_dispatch(compute_cmd, frame.params_gpu, u32.[xx gg, 1, 1]);
     gpu_barrier(compute_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
     // Pass 2: Count-Cull
-    gpu_set_pipeline(compute_cmd, data.pipelines[1]);
+    cull_pipeline_result := gpu_set_pipeline(compute_cmd, data.pipelines[1]);
+    #if DEBUG { assert(cull_pipeline_result == .SUCCESS); }
     ig := max(xx 1, (data.instance_pool.max + 63) / 64);
     gpu_dispatch(compute_cmd, frame.params_gpu, u32.[xx ig, 1, 1]);
     gpu_barrier(compute_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
     // Pass 3: Prefix
-    gpu_set_pipeline(compute_cmd, data.pipelines[2]);
+    prefix_pipeline_result := gpu_set_pipeline(compute_cmd, data.pipelines[2]);
+    #if DEBUG { assert(prefix_pipeline_result == .SUCCESS); }
     gpu_dispatch(compute_cmd, frame.params_gpu, u32.[1, 1, 1]);
     gpu_barrier(compute_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
     // Pass 4: Scatter
-    gpu_set_pipeline(compute_cmd, data.pipelines[3]);
+    scatter_pipeline_result := gpu_set_pipeline(compute_cmd, data.pipelines[3]);
+    #if DEBUG { assert(scatter_pipeline_result == .SUCCESS); }
     gpu_dispatch(compute_cmd, frame.params_gpu, u32.[xx ig, 1, 1]);
     gpu_barrier(compute_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
     // Pass 5: Build draws
-    gpu_set_pipeline(compute_cmd, data.pipelines[4]);
+    build_pipeline_result := gpu_set_pipeline(compute_cmd, data.pipelines[4]);
+    #if DEBUG { assert(build_pipeline_result == .SUCCESS); }
     gpu_dispatch(compute_cmd, frame.params_gpu, u32.[xx gg, 1, 1]);
 
     data.compute_done_value += 1;
@@ -48,7 +53,7 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     gpu_submit(compute_cmd, signals = .[compute_done]);
 
     result2, cmd := gpu_start_command_recording(main_queue);
-    assert(result2 == .SUCCESS);
+    #if DEBUG { assert(result2 == .SUCCESS); }
 
     gpu_begin_render_pass(cmd, .{
         color_targets = .[
@@ -60,7 +65,8 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
             clear_value.depth = 0.0 },
     });
 
-    gpu_set_pipeline(cmd, data.pipelines[5]);
+    opaque_pipeline_result := gpu_set_pipeline(cmd, data.pipelines[5]);
+    #if DEBUG { assert(opaque_pipeline_result == .SUCCESS); }
 
     w, h := gpu_get_surface_extent();
     gpu_set_viewport(cmd, .{x=0, y=0, width=xx w, height=xx h, min_depth=0, max_depth=1});
@@ -69,9 +75,10 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
 
     _, index_data_gpu := gpu_heap_head(data.index_allocator);
 
-    gpu_draw_indexed_indirect_count(cmd, frame.vertex_params_gpu, data.fragment_params_gpu,
+    draw_result := gpu_draw_indexed_indirect_count(cmd, frame.vertex_params_gpu, data.fragment_params_gpu,
             index_data_gpu, frame.params.draw_commands,
             frame.params.draw_count, MAX_DRAWS);
+    #if DEBUG { assert(draw_result == .SUCCESS); }
 
     gpu_end_render_pass(cmd);
     gpu_submit_and_present(cmd, waits = .[compute_done]);

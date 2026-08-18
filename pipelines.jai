@@ -19,7 +19,7 @@ create_pipelines :: (data: *Render_Data) {
     vs_spv      := get_asset(Shader_Data, "/shaders/vertex/opaque.slang");
     fs_spv      := get_asset(Shader_Data, "/shaders/fragment/opaque.slang");
 
-    assert(reset_spv && cull_spv && prefix_spv && scatter_spv && build_spv && vs_spv && fs_spv, "One of shaders are not loaded");
+    #if DEBUG { assert(reset_spv && cull_spv && prefix_spv && scatter_spv && build_spv && vs_spv && fs_spv, "One of shaders are not loaded"); }
 
     #if DEBUG log("All shaders compiled.");
 
@@ -39,16 +39,17 @@ create_pipelines :: (data: *Render_Data) {
     };
 
     data.pipelines[5] = gpu_create_graphics_pipeline(vs_spv.code_words, fs_spv.code_words, raster, "Jay_Render opaque");
+    #if DEBUG { assert(data.pipelines[5] != 0, "Jay_Render opaque pipeline creation failed"); }
 }
 
 compile_pipeline_shader :: (asset_path: string) {
     source_path := get_asset_source_path(asset_path);
-    assert(source_path.count > 0, "Pipeline shader asset path not found: %", asset_path);
+    #if DEBUG { assert(source_path.count > 0, "Pipeline shader asset path not found: %", asset_path); }
 
     vfs := make_shader_vfs(get_asset_source);
     defer cleanup_shader_vfs(vfs);
 
     compiled, spirv := compile_shader(source_path, "", DEBUG, vfs);
     defer if spirv.data free(spirv.data);
-    assert(compiled, "Pipeline shader compilation failed: %", source_path);
+    #if DEBUG { assert(compiled, "Pipeline shader compilation failed: %", source_path); }
 }

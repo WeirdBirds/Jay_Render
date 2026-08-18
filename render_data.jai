@@ -68,12 +68,14 @@ Render_Data :: struct {
 }
 
 gpu_array_init :: (cpu: *[]$T, gpu: *Gpu_Ptr, $count: s64, memory_type: Memory_Type = .DEFAULT) {
-    assert(count > 0, "gpu_array_init count must be positive");
+    #if DEBUG { assert(count > 0, "gpu_array_init count must be positive"); }
 
     c_ptr, g_ptr := gpu_malloc([count]T, memory_type);
-    assert(g_ptr != 0, "gpu_array_init: GPU allocation failed");
-    if memory_type != .GPU {
-        assert(c_ptr != null, "gpu_array_init: mapped allocation failed");
+    #if DEBUG {
+        assert(g_ptr != 0, "gpu_array_init: GPU allocation failed");
+        if memory_type != .GPU {
+            assert(c_ptr != null, "gpu_array_init: mapped allocation failed");
+        }
     }
 
     cpu.count = xx count;
@@ -88,8 +90,9 @@ material_stride :: () -> s64 {
 new_material :: (data: *Render_Data, material: Material_GPU) -> Material_Handle {
     index := get_index(*data.material_pool);
     required := (cast(s64) index + 1) * material_stride();
-    assert(required > 0 && required <= S64_MAX / 8, "Jay_Render: material heap size overflow");
-    assert(gpu_heap_reserve(data.material_allocator, required), "Jay_Render: material heap growth failed");
+    #if DEBUG { assert(required > 0 && required <= S64_MAX / 8, "Jay_Render: material heap size overflow"); }
+    reserved := gpu_heap_reserve(data.material_allocator, required);
+    #if DEBUG { assert(reserved, "Jay_Render: material heap growth failed"); }
 
     material_base, _ := gpu_heap_head(data.material_allocator);
     destination: *Material_GPU = cast(*Material_GPU) (material_base + cast(s64) index * material_stride());
@@ -121,16 +124,18 @@ render_init :: () -> Render_Data {
     result: Render_Data;
 
     result.fragment_params, result.fragment_params_gpu = gpu_malloc(Fragment_Params);
-    assert(result.fragment_params != null && result.fragment_params_gpu != 0, "Jay_Render: fragment parameter allocation failed");
+    #if DEBUG { assert(result.fragment_params != null && result.fragment_params_gpu != 0, "Jay_Render: fragment parameter allocation failed"); }
 
     result.compute_done = gpu_create_semaphore(0);
-    assert(result.compute_done != 0, "Jay_Render: compute semaphore creation failed");
+    #if DEBUG { assert(result.compute_done != 0, "Jay_Render: compute semaphore creation failed"); }
 
     for *frame: result.dynamic {
         frame.params, frame.params_gpu = gpu_malloc(Draw_Params);
         frame.vertex_params, frame.vertex_params_gpu = gpu_malloc(Vertex_Params);
-        assert(frame.params != null && frame.params_gpu != 0, "Jay_Render: draw parameter allocation failed");
-        assert(frame.vertex_params != null && frame.vertex_params_gpu != 0, "Jay_Render: vertex parameter allocation failed");
+        #if DEBUG {
+            assert(frame.params != null && frame.params_gpu != 0, "Jay_Render: draw parameter allocation failed");
+            assert(frame.vertex_params != null && frame.vertex_params_gpu != 0, "Jay_Render: vertex parameter allocation failed");
+        }
     }
 
     result.vertex_allocator = Gpu_Heap(VERTEX_HEAP_BUDGET, max(size_of(Vertex), GPU_HEAP_ALIGNMENT));
@@ -163,7 +168,7 @@ render_init :: () -> Render_Data {
 
         _, frame.params.total_visible = gpu_malloc(u32, .GPU);
         _, frame.params.draw_count = gpu_malloc(u32, .GPU);
-        assert(frame.params.total_visible != 0 && frame.params.draw_count != 0, "Jay_Render: indirect counter allocation failed");
+        #if DEBUG { assert(frame.params.total_visible != 0 && frame.params.draw_count != 0, "Jay_Render: indirect counter allocation failed"); }
 
         frame.vertex_params.instances = result.instances_gpu;
         frame.vertex_params.transforms = result.transforms_gpu;

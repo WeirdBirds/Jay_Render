@@ -44,9 +44,11 @@ Draw_Indexed_Command :: struct {
 }
 
 new_draw_group :: (data: *Render_Data, mesh_id: u32) -> u32 {
-    assert(mesh_id < data.mesh_pool.max, "Jay_Render: invalid mesh for draw group");
-    assert(data.group_pool.thumbstones.count > 0 || data.group_pool.max < MAX_GROUPS,
-        "Jay_Render: MAX_GROUPS reached");
+    #if DEBUG {
+        assert(mesh_id < data.mesh_pool.max, "Jay_Render: invalid mesh for draw group");
+        assert(data.group_pool.thumbstones.count > 0 || data.group_pool.max < MAX_GROUPS,
+            "Jay_Render: MAX_GROUPS reached");
+    }
 
     id := get_index(*data.group_pool);
     data.groups_cpu[id] = .{mesh_id = mesh_id};

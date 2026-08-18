@@ -44,9 +44,11 @@ new_mesh_instance :: (
     world_bounds: Vec4,
     material: Material_Handle
 ) -> u32 {
-    assert(group_id < data.group_pool.max, "Jay_Render: invalid draw group");
-    assert(data.instance_pool.thumbstones.count > 0 || data.instance_pool.max < MAX_INSTANCES,
-        "Jay_Render: MAX_INSTANCES reached");
+    #if DEBUG {
+        assert(group_id < data.group_pool.max, "Jay_Render: invalid draw group");
+        assert(data.instance_pool.thumbstones.count > 0 || data.instance_pool.max < MAX_INSTANCES,
+            "Jay_Render: MAX_INSTANCES reached");
+    }
 
     instance_id := get_index(*data.instance_pool);
     group := data.groups_cpu[group_id];
@@ -63,7 +65,7 @@ new_mesh_instance :: (
 }
 
 destroy_mesh_instance :: (data: *Render_Data, instance_id: u32) {
-    assert(instance_id < data.instance_pool.max, "Jay_Render: invalid mesh instance");
+    #if DEBUG { assert(instance_id < data.instance_pool.max, "Jay_Render: invalid mesh instance"); }
     data.instances_cpu[instance_id].flags = .DESTROYED;
     free_index(*data.instance_pool, instance_id);
 }
@@ -74,14 +76,16 @@ destroy_mesh_instace :: (data: *Render_Data, instance_id: u32) {
 }
 
 gpu_upload_mesh :: (data: *Render_Data, mesh: Mesh_Data) -> u32 {
-    assert(mesh.vertices.count > 0 && mesh.indices.count > 0, "Jay_Render: mesh must contain vertices and indices");
-    assert(data.mesh_pool.thumbstones.count > 0 || data.mesh_pool.max < MAX_MESHES,
-        "Jay_Render: MAX_MESHES reached");
+    #if DEBUG {
+        assert(mesh.vertices.count > 0 && mesh.indices.count > 0, "Jay_Render: mesh must contain vertices and indices");
+        assert(data.mesh_pool.thumbstones.count > 0 || data.mesh_pool.max < MAX_MESHES,
+            "Jay_Render: MAX_MESHES reached");
+    }
 
     mesh_id := get_index(*data.mesh_pool);
     verts := array_copy(mesh.vertices,, allocator = data.vertex_allocator);
     idxs := array_copy(mesh.indices,, allocator = data.index_allocator);
-    assert(verts && idxs, "Jay_Render: mesh heap allocation failed");
+    #if DEBUG { assert(verts && idxs, "Jay_Render: mesh heap allocation failed"); }
 
     data.meshes_cpu[mesh_id] = .{
         first_index = cast(u32) to_element_offset(data.index_allocator, idxs.data, size_of(u32)),

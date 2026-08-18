@@ -48,8 +48,8 @@ make_projection :: (using camera: Camera) -> Mat4 {
 
         result._11 = 1.0 / half_w;
         result._22 = 1.0 / half_h;
-        result._33 = near / (far - near);
-        result._34 = far * near / (far - near);
+        result._33 = 1.0 / (far - near);
+        result._34 = far / (far - near);
         result._44 = 1;
 
         return result;

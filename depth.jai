@@ -9,10 +9,10 @@ create_depth_buffer :: () {
         format = .D32_SFLOAT,
         usage = .DEPTH_STENCIL_ATTACHMENT,
     }, label = "Jay_Render depth buffer");
-    assert(result == .SUCCESS && texture != 0);
+    #if DEBUG { assert(result == .SUCCESS && texture != 0); }
 
     view := gpu_texture_view(texture);
-    assert(view != 0);
+    #if DEBUG { assert(view != 0); }
 
     render.viewport.depth_buffer = texture;
     render.viewport.depth = view;

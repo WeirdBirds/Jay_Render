@@ -1,12 +1,14 @@
 Gpu_Heap :: (capacity: s64, alignment: s64 = 8, memory_type: Memory_Type = .DEFAULT) -> Allocator {
-    assert(capacity > 0, "Gpu_Heap capacity must be positive");
-    assert(alignment > 0, "Gpu_Heap alignment must be positive");
-    assert(memory_type != .GPU, "Gpu_Heap requires CPU-visible memory");
+    #if DEBUG {
+        assert(capacity > 0, "Gpu_Heap capacity must be positive");
+        assert(alignment > 0, "Gpu_Heap alignment must be positive");
+        assert(memory_type != .GPU, "Gpu_Heap requires CPU-visible memory");
+    }
 
     heap: *Gpu_Heap_Data = New(Gpu_Heap_Data);
     heap.owner_allocator = context.allocator;
     heap.cpu_base, heap.gpu_base = gpu_malloc(capacity, memory_type);
-    assert(heap.cpu_base != null && heap.gpu_base != 0, "Gpu_Heap: GPU allocation failed");
+    #if DEBUG { assert(heap.cpu_base != null && heap.gpu_base != 0, "Gpu_Heap: GPU allocation failed"); }
 
     heap.capacity = capacity;
     heap.minimum_capacity = capacity;
@@ -75,27 +77,31 @@ gpu_heap_trim :: (allocator: Allocator, required_capacity: s64 = 0) -> bool {
 
 to_gpu_ptr :: (alloc: Allocator, cpu_ptr: *void) -> Gpu_Ptr {
     heap: *Gpu_Heap_Data = cast(*Gpu_Heap_Data) alloc.data;
-    assert(heap != null && cpu_ptr != null, "to_gpu_ptr requires a live heap allocation");
+    #if DEBUG { assert(heap != null && cpu_ptr != null, "to_gpu_ptr requires a live heap allocation"); }
 
     offset := cast(s64) cpu_ptr - cast(s64) heap.cpu_base;
-    assert(offset >= 0 && offset < heap.capacity, "to_gpu_ptr pointer is outside heap");
+    #if DEBUG { assert(offset >= 0 && offset < heap.capacity, "to_gpu_ptr pointer is outside heap"); }
     return heap.gpu_base + offset.(Gpu_Ptr);
 }
 
 gpu_heap_head :: (allocator: Allocator) -> (*void, Gpu_Ptr) {
     data: *Gpu_Heap_Data = allocator.data;
-    assert(data != null, "gpu_heap_head requires a live heap");
+    #if DEBUG { assert(data != null, "gpu_heap_head requires a live heap"); }
     return data.cpu_base, data.gpu_base;
 }
 
 to_element_offset :: (alloc: Allocator, cpu_ptr: *void, element_size: s64) -> s64 {
     heap: *Gpu_Heap_Data = cast(*Gpu_Heap_Data) alloc.data;
-    assert(heap != null && cpu_ptr != null, "to_element_offset requires a live heap allocation");
-    assert(element_size > 0, "to_element_offset requires a positive element size");
+    #if DEBUG {
+        assert(heap != null && cpu_ptr != null, "to_element_offset requires a live heap allocation");
+        assert(element_size > 0, "to_element_offset requires a positive element size");
+    }
 
     offset := cast(s64) cpu_ptr - cast(s64) heap.cpu_base;
-    assert(offset >= 0 && offset < heap.capacity, "to_element_offset pointer is outside heap");
-    assert(offset % element_size == 0, "to_element_offset pointer is not element aligned");
+    #if DEBUG {
+        assert(offset >= 0 && offset < heap.capacity, "to_element_offset pointer is outside heap");
+        assert(offset % element_size == 0, "to_element_offset pointer is not element aligned");
+    }
     return offset / element_size;
 }
 
@@ -164,7 +170,7 @@ heap_trim_free_tail :: (data: *Gpu_Heap_Data, old_capacity: s64, new_capacity: s
     for *block, index: data.free_list {
         if block.offset + block.size != old_capacity continue;
 
-        assert(block.offset <= new_capacity, "Gpu_Heap trim would discard a live allocation");
+        #if DEBUG { assert(block.offset <= new_capacity, "Gpu_Heap trim would discard a live allocation"); }
         block.size = new_capacity - block.offset;
         if block.size == 0 array_ordered_remove_by_index(*data.free_list, index);
         return;

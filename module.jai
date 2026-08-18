@@ -60,13 +60,15 @@ MAX_FRAMES_IN_FLIGHT :: 3;
 validate_render_config :: () {
     // Keep this before gpu_init: bad contracts must not leave Vulkan or SDL
     // partially initialized. Pool dimensions remain compile-time values.
-    assert(MAX_INSTANCES > 0, "MAX_INSTANCES must be positive");
-    assert(MAX_MESHES > 0, "MAX_MESHES must be positive");
-    assert(MAX_GROUPS > 0, "MAX_GROUPS must be positive");
-    assert(MAX_DRAWS >= MAX_GROUPS, "MAX_DRAWS must be >= MAX_GROUPS");
-    assert(VERTEX_HEAP_BUDGET > 0 && VERTEX_HEAP_BUDGET <= S64_MAX - 64, "VERTEX_HEAP_BUDGET is invalid");
-    assert(INDEX_HEAP_BUDGET > 0 && INDEX_HEAP_BUDGET <= S64_MAX - 64, "INDEX_HEAP_BUDGET is invalid");
-    assert(MATERIAL_HEAP_BUDGET > 0 && MATERIAL_HEAP_BUDGET <= S64_MAX - 64, "MATERIAL_HEAP_BUDGET is invalid");
-    assert(GPU_HEAP_ALIGNMENT > 0, "GPU_HEAP_ALIGNMENT must be positive");
-    assert(GPU_HEAP_GROWTH_FACTOR > 1 && GPU_HEAP_GROWTH_FACTOR <= 8, "GPU_HEAP_GROWTH_FACTOR must be in (1, 8]");
+    #if DEBUG {
+        assert(MAX_INSTANCES > 0, "MAX_INSTANCES must be positive");
+        assert(MAX_MESHES > 0, "MAX_MESHES must be positive");
+        assert(MAX_GROUPS > 0, "MAX_GROUPS must be positive");
+        assert(MAX_DRAWS >= MAX_GROUPS, "MAX_DRAWS must be >= MAX_GROUPS");
+        assert(VERTEX_HEAP_BUDGET > 0 && VERTEX_HEAP_BUDGET <= S64_MAX - 64, "VERTEX_HEAP_BUDGET is invalid");
+        assert(INDEX_HEAP_BUDGET > 0 && INDEX_HEAP_BUDGET <= S64_MAX - 64, "INDEX_HEAP_BUDGET is invalid");
+        assert(MATERIAL_HEAP_BUDGET > 0 && MATERIAL_HEAP_BUDGET <= S64_MAX - 64, "MATERIAL_HEAP_BUDGET is invalid");
+        assert(GPU_HEAP_ALIGNMENT > 0, "GPU_HEAP_ALIGNMENT must be positive");
+        assert(GPU_HEAP_GROWTH_FACTOR > 1 && GPU_HEAP_GROWTH_FACTOR <= 8, "GPU_HEAP_GROWTH_FACTOR must be in (1, 8]");
+    }
 }
