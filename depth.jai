@@ -7,7 +7,7 @@ create_depth_buffer :: () {
     result, texture := gpu_create_texture(.{
         dimensions = .[width, height, 1],
         format = .D32_SFLOAT,
-        usage = .DEPTH_STENCIL_ATTACHMENT,
+        usage = .DEPTH_STENCIL_ATTACHMENT | .SAMPLED,
     }, label = "Jay_Render depth buffer");
     #if DEBUG { assert(result == .SUCCESS && texture != 0); }
 

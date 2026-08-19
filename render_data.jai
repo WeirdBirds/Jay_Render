@@ -60,7 +60,8 @@ Render_Data :: struct {
     compute_done:       Gpu_Semaphore;
     compute_done_value: u64;
 
-    pipelines: [6]Gpu_Pipeline;
+    hiz: HiZ_Data;
+    pipelines: [7]Gpu_Pipeline;
 
     instance_pool: Index_Pool;
     group_pool:    Index_Pool;
@@ -209,6 +210,8 @@ render_data_destroy :: (data: *Render_Data) {
     for *pipeline: data.pipelines {
         if pipeline.* != 0 gpu_free_pipeline(pipeline.*);
     }
+
+    hiz_destroy(data);
 
     if data.compute_done != 0 gpu_destroy_semaphore(data.compute_done);
     for *frame: data.dynamic destroy_frame_params(frame);

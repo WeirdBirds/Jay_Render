@@ -7,6 +7,7 @@ create_pipelines :: (data: *Render_Data) {
         compile_pipeline_shader("/shaders/compute/prefix.slang");
         compile_pipeline_shader("/shaders/compute/scatter.slang");
         compile_pipeline_shader("/shaders/compute/build_draws.slang");
+        compile_pipeline_shader("/shaders/compute/hiz_downsample.slang");
         compile_pipeline_shader("/shaders/vertex/opaque.slang");
         compile_pipeline_shader("/shaders/fragment/opaque.slang");
     }
@@ -16,10 +17,11 @@ create_pipelines :: (data: *Render_Data) {
     prefix_spv  := get_asset(Shader_Data, "/shaders/compute/prefix.slang");
     scatter_spv := get_asset(Shader_Data, "/shaders/compute/scatter.slang");
     build_spv   := get_asset(Shader_Data, "/shaders/compute/build_draws.slang");
+    hiz_spv     := get_asset(Shader_Data, "/shaders/compute/hiz_downsample.slang");
     vs_spv      := get_asset(Shader_Data, "/shaders/vertex/opaque.slang");
     fs_spv      := get_asset(Shader_Data, "/shaders/fragment/opaque.slang");
 
-    #if DEBUG { assert(reset_spv && cull_spv && prefix_spv && scatter_spv && build_spv && vs_spv && fs_spv, "One of shaders are not loaded"); }
+    #if DEBUG { assert(reset_spv && cull_spv && prefix_spv && scatter_spv && build_spv && hiz_spv && vs_spv && fs_spv, "One of shaders are not loaded"); }
 
     #if DEBUG log("All shaders compiled.");
 
@@ -28,6 +30,7 @@ create_pipelines :: (data: *Render_Data) {
     data.pipelines[2] = gpu_create_compute_pipeline(prefix_spv.code_words, "Jay_Render prefix");
     data.pipelines[3] = gpu_create_compute_pipeline(scatter_spv.code_words, "Jay_Render scatter");
     data.pipelines[4] = gpu_create_compute_pipeline(build_spv.code_words, "Jay_Render build draws");
+    data.pipelines[6] = gpu_create_compute_pipeline(hiz_spv.code_words, "Jay_Render hiz downsample");
 
     blend: Gpu_Blend_Desc = {};
 

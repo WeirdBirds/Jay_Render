@@ -1,3 +1,5 @@
+#import "Random";
+
 renderer_shutdown :: () {
     if render.gpu_initialized {
         gpu_wait_idle();
@@ -142,6 +144,7 @@ Jay_Render :: struct {
         render.data_initialized = true;
         create_pipelines(*render.data);
         create_depth_buffer();
+        hiz_init(*render.data);
 
         if !render.viewport.depth {
             renderer_start_failed(engine, "depth buffer creation failed");
@@ -178,16 +181,17 @@ Jay_Render :: struct {
         group_id := new_draw_group(*render.data, mesh_id);
         for i: 0..100 {
             for j: 0..100 {
+                size:float32 = xx (random_get_zero_to_one_new()+0.1) * 0.5;
                 transform := to_matrix(Transform.{
-                    translation = Vec3.{xx (i - 50), xx (j - 50), 0},
+                    translation = Vec3.{xx (i - 50), xx (j - 50), xx random_get_zero_to_one_new() * 20.0},
                     rotation = to_quat(Radians.{0, 0, xx (i / (j + 1))}),
-                    scale = Vec3.new(0.1),
+                    scale = Vec3.new(size),
                 });
                 new_mesh_instance(
                     *render.data,
                     group_id,
                     transform,
-                    Vec4.new(get_translation(transform), 0.613),
+                    Vec4.new(get_translation(transform), size * 6.13),
                     materials[(i + j) % materials.count],
                 );
             }
@@ -225,6 +229,7 @@ Jay_Render :: struct {
             gpu_wait_idle();
             gpu_swapchain_resize(xx w, xx h);
             recreate_depth_buffer();
+            hiz_recreate(*render.data);
             render.framebuffer_resized = false;
             if !render.viewport.depth return;
         }

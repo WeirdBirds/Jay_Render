@@ -46,6 +46,7 @@
 #load "gpu_heap.jai";
 #load "render_data.jai";
 #load "renderer.jai";
+#load "hiz.jai";
 #load "depth.jai";
 #load "pipelines.jai";
 #load "frame.jai";

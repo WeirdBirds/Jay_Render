@@ -81,5 +81,6 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     #if DEBUG { assert(draw_result == .SUCCESS); }
 
     gpu_end_render_pass(cmd);
+    hiz_build(data, cmd);
     gpu_submit_and_present(cmd, waits = .[compute_done]);
 }
