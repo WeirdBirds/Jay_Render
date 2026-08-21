@@ -263,6 +263,111 @@ Jay_Render :: struct {
 
         #if DEBUG if engine.timer.delta_time > 0 log("% FPS", 1 / engine.timer.delta_time);
         camera_capture(camera, transform);
+        // Pixel-identical check at frame 300: same transform, on vs off, must be identical (no false positives).
+        if (!render.data.compare_done && render.frames_rendered == 300) {
+            log("compare: starting pixel-identical check (on vs off, same transform)");
+            render.data.probe_enabled = true;
+            gpu_wait_idle();
+            // On
+            savedOcc := render.data.occlusion_enabled;
+            render.data.occlusion_enabled = true;
+            camera_capture(camera, transform);
+            gpu_wait_idle();
+            if (render.data.probe_map == null || render.data.probe_bytes == 0) {
+                log("compare: probe not ready for on");
+            } else {
+                render.data.compare_bytes = render.data.probe_bytes;
+                render.data.compare_buf = cast(*u8) alloc(render.data.compare_bytes);
+                occluded_save_bytes := cast(s64) MAX_INSTANCES * 4;
+                occluded_save := cast(*u8) alloc(occluded_save_bytes);
+                memcpy(occluded_save, render.data.occluded_flags_cpu.data, occluded_save_bytes);
+                depth_save_bytes := render.data.depth_probe_bytes;
+                depth_save := cast(*u8) alloc(depth_save_bytes);
+                if (render.data.depth_probe_map != null) memcpy(depth_save, render.data.depth_probe_map, depth_save_bytes);
+                if (render.data.compare_buf != null) {
+                    memcpy(render.data.compare_buf, render.data.probe_map, render.data.compare_bytes);
+                    log("compare: saved on (% bytes)", render.data.compare_bytes);
+                    // Off, same transform
+                    render.data.occlusion_enabled = false;
+                    camera_capture(camera, transform);
+                    gpu_wait_idle();
+                    if (render.data.probe_map != null) {
+                        diffBytes: s64 = 0;
+                        pixelDiff: s64 = 0;
+                        totalPixels := render.data.compare_bytes / 4;
+                        for p: 0..totalPixels-1 {
+                            off := p*4;
+                            b0 := render.data.compare_buf[off+0];
+                            g0 := render.data.compare_buf[off+1];
+                            r0 := render.data.compare_buf[off+2];
+                            b1 := render.data.probe_map[off+0];
+                            g1 := render.data.probe_map[off+1];
+                            r1 := render.data.probe_map[off+2];
+                            if (b0 != b1 || g0 != g1 || r0 != r1) pixelDiff += 1;
+                            if (render.data.compare_buf[off] != render.data.probe_map[off]) diffBytes += 1;
+                            if (render.data.compare_buf[off+1] != render.data.probe_map[off+1]) diffBytes += 1;
+                            if (render.data.compare_buf[off+2] != render.data.probe_map[off+2]) diffBytes += 1;
+                            if (render.data.compare_buf[off+3] != render.data.probe_map[off+3]) diffBytes += 1;
+                        }
+                        log("compare: diffBytes=% pixelDiff=% totalPixels=%", diffBytes, pixelDiff, totalPixels);
+                        if (pixelDiff == 0) {
+                            log("compare: IDENTICAL - no false positives");
+                        } else {
+                            log("compare: DIFFERENT - % pixels differ (false occlusion)", pixelDiff);
+                            w, h := gpu_get_surface_extent();
+                            screenW := cast(s64) w;
+                            screenH := cast(s64) h;
+                            view := make_view(transform);
+                            proj := make_projection(camera);
+                            viewProj := proj * view;
+                            culledTotal: s64 = 0;
+                            falseCulled: s64 = 0;
+                            for id: 0..xx render.data.instance_pool.max-1 {
+                                if (cast(*u32)(occluded_save + id*4)[0] != 1) continue;
+                                culledTotal += 1;
+                                b := render.data.bounds_cpu[id];
+                                cv := view * Vec4.new(Vec3.{b.center_radius.x, b.center_radius.y, b.center_radius.z}, 1.0);
+                                d := -cv.z;
+                                r := b.center_radius.w;
+                                if (d - r <= 0.0) continue;
+                                c_clip := viewProj * Vec4.new(Vec3.{b.center_radius.x, b.center_radius.y, b.center_radius.z}, 1.0);
+                                if (c_clip.w <= 0.0) continue;
+                                c_ndc := Vec2.{c_clip.x / c_clip.w, c_clip.y / c_clip.w};
+                                cx := cast(s64) ((c_ndc.x * 0.5 + 0.5) * cast(float32) screenW);
+                                cy := cast(s64) ((c_ndc.y * 0.5 + 0.5) * cast(float32) screenH);
+                                foundDiff := false;
+                                for dy: -32..32 {
+                                    for dx: -32..32 {
+                                        x := cx + dx; y := cy + dy;
+                                        if (x < 0 || y < 0 || x >= screenW || y >= screenH) continue;
+                                        pIdx := y * screenW + x;
+                                        off2 := pIdx * 4;
+                                        if (off2+2 >= render.data.compare_bytes) continue;
+                                        b0 := render.data.compare_buf[off2+0];
+                                        g0 := render.data.compare_buf[off2+1];
+                                        r0 := render.data.compare_buf[off2+2];
+                                        b1 := render.data.probe_map[off2+0];
+                                        g1 := render.data.probe_map[off2+1];
+                                        r1 := render.data.probe_map[off2+2];
+                                        if (b0 != b1 || g0 != g1 || r0 != r1) { foundDiff = true; break; }
+                                    }
+                                    if (foundDiff) break;
+                                }
+                                if (foundDiff) falseCulled += 1;
+                                if (falseCulled < 5) {
+                                    log("false culled id=% center=(% % %) r=% ndc=(% %) screen=(% %)", cast(s64) id, b.center_radius.x, b.center_radius.y, b.center_radius.z, r, c_ndc.x, c_ndc.y, cx, cy);
+                                }
+                            }
+                            log("ground truth: culled=% falseCulled=%", culledTotal, falseCulled);
+                        }
+                    }
+                    render.data.occlusion_enabled = savedOcc;
+                    free(occluded_save);
+                    free(depth_save);
+                }
+            }
+            render.data.compare_done = true;
+        }
         render.frames_rendered += 1;
     }
 

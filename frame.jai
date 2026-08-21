@@ -173,7 +173,7 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     // Pyramid from this frame's depth (reverse-Z min-reduce).
     hiz_build(data, cmd);
 
-    #if DEBUG { if data.probe_enabled probe_capture(data, cmd); }
+    #if DEBUG { if data.probe_enabled { probe_capture(data, cmd); depth_probe_capture(data, cmd); } }
 
     // Main-A: render + pyramid. Submit it before recording the rescue chain so
     // the pyramid read by pass B is ordered after the writes on the timeline.
@@ -253,7 +253,7 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
 
         gpu_end_render_pass(cmd_b);
 
-        #if DEBUG { if data.probe_enabled probe_capture(data, cmd_b); }
+        #if DEBUG { if data.probe_enabled { probe_capture(data, cmd_b); depth_probe_capture(data, cmd_b); } }
 
         gpu_submit_and_present(cmd_b, waits = .[rescue_done]);
     }
@@ -280,6 +280,23 @@ probe_capture :: (data: *Render_Data, cmd: Gpu_Command_Buffer) {
     copy_result := gpu_copy_from_texture(cmd, data.probe_gpu, gpu_swapchain_image());
     #if DEBUG { assert(copy_result == .SUCCESS, "probe: copy failed"); }
     gpu_barrier(cmd, .TRANSFER, .HOST);
+}
+
+depth_probe_capture :: (data: *Render_Data, cmd: Gpu_Command_Buffer) {
+    if !data.depth_probe_map {
+        w, h := gpu_get_surface_extent();
+        bytes := cast(s64) w * h * 4;
+        data.depth_probe_map, data.depth_probe_gpu = gpu_malloc(bytes, .READBACK);
+        data.depth_probe_bytes = bytes;
+    }
+    // Depth writes (late fragment) -> transfer
+    gpu_barrier(cmd, .LATE_FRAGMENT_TESTS, .TRANSFER);
+    depth_tex := render.viewport.depth_buffer;
+    if depth_tex != 0 {
+        copy_result := gpu_copy_from_texture(cmd, data.depth_probe_gpu, depth_tex);
+        #if DEBUG { assert(copy_result == .SUCCESS, "depth probe copy failed"); }
+        gpu_barrier(cmd, .TRANSFER, .HOST);
+    }
 }
 
 // Dump a coarse histogram of the probe buffer. The buffer holds the frame that

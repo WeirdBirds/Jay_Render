@@ -67,7 +67,8 @@ Render_Data :: struct {
     compute_done_value: u64;
     pyr_prev:           u64;    // pyramid build value of the previous frame (chain-A waits it)
 
-    occluded_flags_gpu: Gpu_Ptr;   // persistent GPU-only flags: 1 = pass-A rejected
+    occluded_flags_cpu: []u32;
+    occluded_flags_gpu: Gpu_Ptr;   // persistent flags: 1 = pass-A rejected (now host-visible for debug)
     occlusion_enabled:  bool = true; // false => stage-1 path: frustum only, no rescue pass
     history_ready:      bool;      // pyramid exists and can back history predictions
     first_frame:        u32 = 1;
@@ -82,6 +83,15 @@ Render_Data :: struct {
     probe_gpu:   Gpu_Ptr;
     probe_bytes: s64 = 0;
     probe_frame: u32 = 0;
+    compare_done: bool;
+    compare_buf: *u8;
+    compare_bytes: s64;
+    // Depth readback for ground-truth check
+    depth_probe_map: *u8;
+    depth_probe_gpu: Gpu_Ptr;
+    depth_probe_bytes: s64 = 0;
+    depth_compare_buf: *u8;
+    depth_compare_bytes: s64;
 
     instance_pool: Index_Pool;
     group_pool:    Index_Pool;
@@ -176,9 +186,10 @@ render_init :: () -> Render_Data {
     gpu_array_init(*result.groups_cpu, *result.groups_gpu, MAX_GROUPS);
     gpu_array_init(*result.instance_group_static_cpu, *result.instance_group_static_gpu, MAX_INSTANCES);
 
-    // Persistent pass-A-reject flags, read and written by both chains.
-    _, result.occluded_flags_gpu = gpu_malloc([MAX_INSTANCES]u32, .GPU);
+    // Persistent pass-A-reject flags, read and written by both chains (host-visible for ground-truth debug).
+    gpu_array_init(*result.occluded_flags_cpu, *result.occluded_flags_gpu, MAX_INSTANCES, .READBACK);
     #if DEBUG { assert(result.occluded_flags_gpu != 0, "Jay_Render: occluded flags allocation failed"); }
+    for i: 0..MAX_INSTANCES-1 { result.occluded_flags_cpu[i] = 0; }
 
     for *frame: result.dynamic {
         frame.params.instances = result.instances_gpu;
@@ -267,8 +278,11 @@ render_data_destroy :: (data: *Render_Data) {
     hiz_destroy(data);
 
     if data.compute_done != 0 gpu_destroy_semaphore(data.compute_done);
-    free_gpu_ptr(data.occluded_flags_gpu);
+    free_gpu_cpu(data.occluded_flags_cpu.data);
     free_gpu_ptr(data.probe_gpu);
+    free_gpu_ptr(data.depth_probe_gpu);
+    if data.compare_buf != null free(data.compare_buf);
+    if data.depth_compare_buf != null free(data.depth_compare_buf);
     for *frame: data.dynamic destroy_frame_params(frame);
 
     free_gpu_cpu(data.transforms_cpu.data);
