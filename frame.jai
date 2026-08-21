@@ -64,6 +64,11 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
         frame.params.hiz_view_indices[mip] = cast(u32) data.hiz.mip_views[mip];
     }
 
+    // Whether this frame needs the rescue pass (history predicted some occlusions).
+    // Skip the 4-dispatch rescue chain when history is off (camera moving) — it would
+    // find zero rejects and waste time. Still signal the pyramid for next frame.
+    do_rescue := data.occlusion_enabled && history_enabled != 0 && data.first_frame == 0 && data.history_ready;
+
     // Pass B (rescue) reads the same frame-level state; its own chain compiles
     // only the pass-A rejects (occluded_flags != 0), retested against the
     // fresh pyramid. The view matrices and frustum planes are mandatory —
@@ -168,12 +173,19 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     // Pyramid from this frame's depth (reverse-Z min-reduce).
     hiz_build(data, cmd);
 
-    #if DEBUG { probe_capture(data, cmd); }
+    #if DEBUG { if data.probe_enabled probe_capture(data, cmd); }
 
     // Main-A: render + pyramid. Submit it before recording the rescue chain so
     // the pyramid read by pass B is ordered after the writes on the timeline.
     if !data.occlusion_enabled {
         gpu_submit_and_present(cmd, waits = .[compute_done]);
+    } else if !do_rescue {
+        // History off (camera moving) or first frame — no rejects to rescue.
+        // Still signal the pyramid so next frame's history has fresh data.
+        data.compute_done_value += 1;
+        pyramid_done := Gpu_Timeline_Pair.{data.compute_done, data.compute_done_value};
+        data.pyr_prev = pyramid_done.value;
+        gpu_submit_and_present(cmd, signals = .[pyramid_done], waits = .[compute_done]);
     } else {
         // Same-frame rescue on the compute queue: the compute-chain dispatches
         // hang on the MAIN queue on this GPU/driver (verified by bisection),
@@ -241,7 +253,7 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
 
         gpu_end_render_pass(cmd_b);
 
-        #if DEBUG { probe_capture(data, cmd_b); }
+        #if DEBUG { if data.probe_enabled probe_capture(data, cmd_b); }
 
         gpu_submit_and_present(cmd_b, waits = .[rescue_done]);
     }

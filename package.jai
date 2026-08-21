@@ -147,6 +147,10 @@ Jay_Render :: struct {
         if cached != null && cached[0] == 48 {  // 48 = '0'
             render.data.occlusion_enabled = false;
         }
+        probe_cached := SDL_getenv("JAY_PROBE");
+        if probe_cached != null && probe_cached[0] == 49 { // '1'
+            render.data.probe_enabled = true;
+        }
         render.data_initialized = true;
         create_pipelines(*render.data);
         create_depth_buffer();

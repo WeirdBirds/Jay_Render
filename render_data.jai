@@ -76,7 +76,8 @@ Render_Data :: struct {
     hiz: HiZ_Data;
     pipelines: [7]Gpu_Pipeline;
 
-    // Debug: swapchain color readback (verify-only probe).
+    // Debug: swapchain color readback (verify-only probe, JAY_PROBE=1).
+    probe_enabled: bool;
     probe_map:   *u8;
     probe_gpu:   Gpu_Ptr;
     probe_bytes: s64 = 0;
