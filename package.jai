@@ -279,8 +279,8 @@ Jay_Render :: struct {
                 render.data.compare_bytes = render.data.probe_bytes;
                 render.data.compare_buf = cast(*u8) alloc(render.data.compare_bytes);
                 occluded_save_bytes := cast(s64) MAX_INSTANCES * 4;
-                occluded_save := cast(*u8) alloc(occluded_save_bytes);
-                memcpy(occluded_save, render.data.occluded_flags_cpu.data, occluded_save_bytes);
+                occluded_save_u32 := cast(*u32) alloc(occluded_save_bytes);
+                memcpy(cast(*u8) occluded_save_u32, render.data.occluded_flags_cpu.data, occluded_save_bytes);
                 depth_save_bytes := render.data.depth_probe_bytes;
                 depth_save := cast(*u8) alloc(depth_save_bytes);
                 if (render.data.depth_probe_map != null) memcpy(depth_save, render.data.depth_probe_map, depth_save_bytes);
@@ -323,7 +323,7 @@ Jay_Render :: struct {
                             culledTotal: s64 = 0;
                             falseCulled: s64 = 0;
                             for id: 0..xx render.data.instance_pool.max-1 {
-                                if (cast(*u32)(occluded_save + id*4)[0] != 1) continue;
+                                if (occluded_save_u32[id] != 1) continue;
                                 culledTotal += 1;
                                 b := render.data.bounds_cpu[id];
                                 cv := view * Vec4.new(Vec3.{b.center_radius.x, b.center_radius.y, b.center_radius.z}, 1.0);
@@ -362,7 +362,7 @@ Jay_Render :: struct {
                         }
                     }
                     render.data.occlusion_enabled = savedOcc;
-                    free(occluded_save);
+                    free(cast(*u8) occluded_save_u32);
                     free(depth_save);
                 }
             }
