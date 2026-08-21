@@ -41,7 +41,7 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     a := camera_near / (camera_far - camera_near);
     b := camera_far * camera_near / (camera_far - camera_near);
     frame.params.ndc_coeffs = .{a, b};
-    frame.params.hiz_epsilon = 0.001;
+    frame.params.hiz_epsilon = 0.002;
     frame.params.first_frame = data.first_frame;
     frame.params.occluded_flags = data.occluded_flags_gpu;
     frame.params.counters = data.hiz.counters_gpu[frame_index];
