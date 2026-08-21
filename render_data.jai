@@ -16,13 +16,19 @@ Fragment_Params :: struct {
 }
 
 Frame_Params :: struct {
-    params:     *Draw_Params;
+    params:     *Draw_Params;     // pass A chain + main render + rescue render
     params_gpu: Gpu_Ptr;
+    params_b:   *Draw_Params;     // pass B (rescue) chain params
+    params_b_gpu: Gpu_Ptr;
 
     vertex_params:     *Vertex_Params;
     vertex_params_gpu: Gpu_Ptr;
+    vertex_params_b:   *Vertex_Params;
+    vertex_params_b_gpu: Gpu_Ptr;
 
     // GPU-only slices. CPU views remain null and exist only for ownership.
+    // Pass B reuses the same scratch (it runs after pass A's render has
+    // consumed it), so there is one set per frame, not per chain.
     visibility_flags_cpu:   []u32;
     instance_groups_cpu:    []u32;
     group_counts_cpu:       []u32;
@@ -59,9 +65,22 @@ Render_Data :: struct {
 
     compute_done:       Gpu_Semaphore;
     compute_done_value: u64;
+    pyr_prev:           u64;    // pyramid build value of the previous frame (chain-A waits it)
+
+    occluded_flags_gpu: Gpu_Ptr;   // persistent GPU-only flags: 1 = pass-A rejected
+    occlusion_enabled:  bool = true; // false => stage-1 path: frustum only, no rescue pass
+    history_ready:      bool;      // pyramid exists and can back history predictions
+    first_frame:        u32 = 1;
+    prev_transform:     Mat4;
 
     hiz: HiZ_Data;
     pipelines: [7]Gpu_Pipeline;
+
+    // Debug: swapchain color readback (verify-only probe).
+    probe_map:   *u8;
+    probe_gpu:   Gpu_Ptr;
+    probe_bytes: s64 = 0;
+    probe_frame: u32 = 0;
 
     instance_pool: Index_Pool;
     group_pool:    Index_Pool;
@@ -107,6 +126,7 @@ refresh_gpu_roots :: (data: *Render_Data) {
 
     for *frame: data.dynamic {
         frame.vertex_params.vertices = vertex_base;
+        frame.vertex_params_b.vertices = vertex_base;
     }
     data.fragment_params.materials = material_base;
 }
@@ -132,10 +152,14 @@ render_init :: () -> Render_Data {
 
     for *frame: result.dynamic {
         frame.params, frame.params_gpu = gpu_malloc(Draw_Params);
+        frame.params_b, frame.params_b_gpu = gpu_malloc(Draw_Params);
         frame.vertex_params, frame.vertex_params_gpu = gpu_malloc(Vertex_Params);
+        frame.vertex_params_b, frame.vertex_params_b_gpu = gpu_malloc(Vertex_Params);
         #if DEBUG {
             assert(frame.params != null && frame.params_gpu != 0, "Jay_Render: draw parameter allocation failed");
+            assert(frame.params_b != null && frame.params_b_gpu != 0, "Jay_Render: draw parameter B allocation failed");
             assert(frame.vertex_params != null && frame.vertex_params_gpu != 0, "Jay_Render: vertex parameter allocation failed");
+            assert(frame.vertex_params_b != null && frame.vertex_params_b_gpu != 0, "Jay_Render: vertex parameter B allocation failed");
         }
     }
 
@@ -150,6 +174,10 @@ render_init :: () -> Render_Data {
     gpu_array_init(*result.meshes_cpu, *result.meshes_gpu, MAX_MESHES);
     gpu_array_init(*result.groups_cpu, *result.groups_gpu, MAX_GROUPS);
     gpu_array_init(*result.instance_group_static_cpu, *result.instance_group_static_gpu, MAX_INSTANCES);
+
+    // Persistent pass-A-reject flags, read and written by both chains.
+    _, result.occluded_flags_gpu = gpu_malloc([MAX_INSTANCES]u32, .GPU);
+    #if DEBUG { assert(result.occluded_flags_gpu != 0, "Jay_Render: occluded flags allocation failed"); }
 
     for *frame: result.dynamic {
         frame.params.instances = result.instances_gpu;
@@ -174,6 +202,28 @@ render_init :: () -> Render_Data {
         frame.vertex_params.instances = result.instances_gpu;
         frame.vertex_params.transforms = result.transforms_gpu;
         frame.vertex_params.visible_instances = frame.params.visible_instances;
+
+        // Pass B reuses the same frame scratch: its chains run only after the
+        // pass-A render has consumed it.
+        frame.params_b.instances = frame.params.instances;
+        frame.params_b.transforms = frame.params.transforms;
+        frame.params_b.bounds = frame.params.bounds;
+        frame.params_b.meshes = frame.params.meshes;
+        frame.params_b.groups = frame.params.groups;
+        frame.params_b.instance_group_static = frame.params.instance_group_static;
+        frame.params_b.visible_flags = frame.params.visible_flags;
+        frame.params_b.instance_groups = frame.params.instance_groups;
+        frame.params_b.group_counts = frame.params.group_counts;
+        frame.params_b.group_offsets = frame.params.group_offsets;
+        frame.params_b.group_write_cursor = frame.params.group_write_cursor;
+        frame.params_b.total_visible = frame.params.total_visible;
+        frame.params_b.visible_instances = frame.params.visible_instances;
+        frame.params_b.draw_commands = frame.params.draw_commands;
+        frame.params_b.draw_count = frame.params.draw_count;
+
+        frame.vertex_params_b.instances = result.instances_gpu;
+        frame.vertex_params_b.transforms = result.transforms_gpu;
+        frame.vertex_params_b.visible_instances = frame.params.visible_instances;
     }
 
     result.fragment_params.instances = result.instances_gpu;
@@ -201,8 +251,10 @@ destroy_frame_params :: (frame: *Frame_Params) {
         free_gpu_ptr(frame.params.visible_instances);
         free_gpu_ptr(frame.params.draw_commands);
         free_gpu_cpu(frame.params);
+        free_gpu_cpu(frame.params_b);
     }
     if frame.vertex_params free_gpu_cpu(frame.vertex_params);
+    if frame.vertex_params_b free_gpu_cpu(frame.vertex_params_b);
     frame.* = .{};
 }
 
@@ -214,6 +266,8 @@ render_data_destroy :: (data: *Render_Data) {
     hiz_destroy(data);
 
     if data.compute_done != 0 gpu_destroy_semaphore(data.compute_done);
+    free_gpu_ptr(data.occluded_flags_gpu);
+    free_gpu_ptr(data.probe_gpu);
     for *frame: data.dynamic destroy_frame_params(frame);
 
     free_gpu_cpu(data.transforms_cpu.data);

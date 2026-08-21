@@ -1,10 +1,30 @@
+// Draw_Params mirrors common.slang's Draw_Params exactly (scalar layout,
+// 480 bytes: 17 GPU root pointers at offset 344..480). Shaders dereference
+// the pushed pointer directly, so field order must never diverge.
+
 Draw_Params :: struct {
-    group_count:    u32;
-    instance_count: u32;
-    padding0:       u32;
-    padding1:       u32;
+    group_count:     u32;
+    instance_count:  u32;
+    cull_mode:       u32;   // 0 = pass A (frustum + history), 1 = pass B (rescue retest)
+    history_enabled: u32;   // camera-motion gate: 0 = frustum only
 
     frustum_planes: [6]Vec4;
+
+    // Culling helpers (Z-up LH, reverse-Z: near -> 1.0, far -> 0.0).
+    view_projection: Mat4;  // full VP (matches the render pass)
+    view:            Mat4;  // view matrix (sphere -> view-space depth)
+    screen_size:     Vec2;  // full-res framebuffer size in pixels
+    hiz_base_size:   Vec2;  // pyramid base dims
+    ndc_coeffs:      Vec2;  // reverse-Z coefficients: revz(d) = coeffs.y / d - coeffs.x
+    hiz_epsilon:     float32; // depth slack against the tile min (never culls past it)
+    pad_hiz:         float32;
+    hiz_levels:      u32;
+    first_frame:     u32;   // 1 => zero occluded_flags before culling
+
+    hiz_view_indices: [16]u32;  // storage-view index per pyramid level
+
+    occluded_flags: Gpu_Ptr;  // persistent: 1 = pass-A rejected (rescue retest set)
+    counters:       Gpu_Ptr;  // per-frame stats ring
 
     // Root addresses. All persistent mesh/material references are scalar
     // indices or offsets relative to their owning root.
@@ -36,21 +56,22 @@ Draw_Group :: struct {
 }
 
 Draw_Indexed_Command :: struct {
-    index_count:   u32;
+    index_count:    u32;
     instance_count: u32;
-    first_index:   u32;
-    vertex_offset: s32;
+    first_index:    u32;
+    vertex_offset:  u32;
     first_instance: u32;
+    padding:        u32;
 }
 
 new_draw_group :: (data: *Render_Data, mesh_id: u32) -> u32 {
     #if DEBUG {
-        assert(mesh_id < data.mesh_pool.max, "Jay_Render: invalid mesh for draw group");
         assert(data.group_pool.thumbstones.count > 0 || data.group_pool.max < MAX_GROUPS,
             "Jay_Render: MAX_GROUPS reached");
     }
 
-    id := get_index(*data.group_pool);
-    data.groups_cpu[id] = .{mesh_id = mesh_id};
-    return id;
+    group_id := get_index(*data.group_pool);
+    data.groups_cpu[group_id] = .{mesh_id = mesh_id};
+    #if DEBUG { assert(group_id < MAX_GROUPS); }
+    return group_id;
 }

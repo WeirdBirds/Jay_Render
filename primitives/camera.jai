@@ -16,14 +16,15 @@ Camera :: struct {
 }
 
 camera_capture :: (camera: Camera, transform: Mat4) {
-    
+
     v := make_view(transform);
     p := make_projection(camera);
 
     view_projection := p * v;
 
-    frustum_planes := get_frustum_planes(view_projection); 
-    render_frame(*render.data, render.queues.main, render.queues.compute, camera.target.image, camera.target.depth, view_projection, frustum_planes);
+    frustum_planes := get_frustum_planes(view_projection);
+    render_frame(*render.data, render.queues.main, render.queues.compute, camera.target.image, camera.target.depth,
+        view_projection, v, frustum_planes, transform, camera.near, camera.far);
 }
 
 make_projection :: (using camera: Camera) -> Mat4 {

@@ -19,6 +19,12 @@ HiZ_Counters :: struct {
     base_texels: u32;   // threads that wrote the base level
     mip_texels:  u32;   // threads that wrote higher levels
     zero_tiles:  u32;   // base tiles whose min is exactly 0 (uncovered => no occluder)
+    // Stage 2: occlusion stats. Written by the cull dispatches after the
+    // counter reset at the start of chain A; read back three frames later.
+    rejected:    u32;   // pass A rejected (deferred to pass B)
+    rescued:     u32;   // pass B drew (was rejected, fresh pyramid says visible)
+    confirmed:   u32;   // pass B kept occluded (fresh pyramid agrees)
+    history:     u32;   // pass A engaged the history test on a candidate
     per_dispatch: [32]u32;   // debug: survivor count per dispatch (reset zeroes [0..31])
 }
 
@@ -211,47 +217,50 @@ hiz_recreate :: (data: *Render_Data) {
     hiz_init(data);
 }
 
+// Read last frame's counters and log them. The slot the GPU filled three
+// frames ago is complete by pacing, and the entry can never race the reset
+// (the reset is GPU-side, ordered before this frame's adds).
+hiz_frame_begin :: (data: *Render_Data) {
+    hiz := *data.hiz;
+    if !hiz.created return;
+
+    #if DEBUG {
+        frame_index := gpu_frame_index();
+        counters := hiz.counters[frame_index];
+        // Debug draw args via counters (build/prefix write counters[18]/[19]).
+        dc := counters.per_dispatch[11]; // counters[18]
+        tvv := counters.per_dispatch[12]; // counters[19]
+        log("hiz (slot %): base=% mip=% zero=% rej=% res=% conf=% hist=% drawn=% dc=% vis=% pd=% % % % % % %",
+            frame_index, counters.base_texels, counters.mip_texels, counters.zero_tiles,
+            counters.rejected, counters.rescued, counters.confirmed, counters.history,
+            counters.per_dispatch[9], dc, tvv,
+            counters.per_dispatch[0], counters.per_dispatch[1], counters.per_dispatch[2],
+            counters.per_dispatch[3], counters.per_dispatch[4], counters.per_dispatch[5],
+            counters.per_dispatch[6], counters.per_dispatch[7], counters.per_dispatch[8],
+            counters.per_dispatch[10]);
+    }
+}
+
 // Build the pyramid from this frame's depth on the main queue, right after the
 // opaque render pass. In-buffer execution barriers only — no cross-queue sync.
-//
-// The per-frame counters slot holds the results of the frame that used the
-// slot three frames ago (frame pacing guarantees it has completed), so we log
-// them here and zero the slot for the current frame.
+// The counter reset no longer lives here: the reset dispatch at the start of
+// chain A (compute queue) zeroes this frame's slot before its chains add.
 hiz_build :: (data: *Render_Data, cmd: Gpu_Command_Buffer) {
     hiz := *data.hiz;
     if !hiz.created return;
 
     frame_index := gpu_frame_index();
-    #if DEBUG {
-        counters := hiz.counters[frame_index];
-        log("hiz (slot %): base=% mip=% zero=% pd=% % % % % % % % % % %",
-            frame_index, counters.base_texels, counters.mip_texels, counters.zero_tiles,
-            counters.per_dispatch[0], counters.per_dispatch[1], counters.per_dispatch[2],
-            counters.per_dispatch[3], counters.per_dispatch[4], counters.per_dispatch[5],
-            counters.per_dispatch[6], counters.per_dispatch[7], counters.per_dispatch[8],
-            counters.per_dispatch[9], counters.per_dispatch[10]);
-    }
-    // Counters are reset GPU-side (mode 2 dispatch) at the start of every
-    // build; the mapped-memory CPU zero is removed because it races the
-    // previous frame's in-flight adds.
 
     params := hiz.params[frame_index][0];
     params.counters = hiz.counters_gpu[frame_index];
     params.depth_view_index = cast(u32) hiz.depth_view;
     params.sampler_index = cast(u32) hiz.sampler;
 
+    // Depth-write (late fragment tests) -> compute-read sync: the pyramid base
+    // reads the depth just written by the render pass.
     gpu_barrier(cmd, .LATE_FRAGMENT_TESTS, .COMPUTE_SHADER);
     result := gpu_set_pipeline(cmd, hiz.pipeline);
     #if DEBUG { assert(result == .SUCCESS, "hiz: pipeline bind failed"); }
-
-    // Reset the GPU-side counters. The CPU's mapped-memory zeroing raced the
-    // previous frame's async adds; the GPU must zero itself, ordered ahead of
-    // the build dispatches on the queue.
-    params_reset := hiz.params[frame_index][HIZ_RESET_SLOT];
-    params_reset.mode = 2;
-    params_reset.dispatch_index = 0;
-    params_reset.counters = hiz.counters_gpu[frame_index];
-    gpu_dispatch(cmd, hiz.params_gpu[frame_index][HIZ_RESET_SLOT], u32.[4, 1, 1]);
 
     // Base mip: min of the corresponding 2x2 full-res depth values.
     params.mode = 0;

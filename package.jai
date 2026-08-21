@@ -141,6 +141,12 @@ Jay_Render :: struct {
         }
 
         render.data = render_init();
+        // JAY_OCCLUSION=0 forces the stage-1 path (frustum only, no rescue
+        // pass) — used for A/B pixel-identity validation and cull bisecting.
+        cached := SDL_getenv("JAY_OCCLUSION");
+        if cached != null && cached[0] == 48 {  // 48 = '0'
+            render.data.occlusion_enabled = false;
+        }
         render.data_initialized = true;
         create_pipelines(*render.data);
         create_depth_buffer();
