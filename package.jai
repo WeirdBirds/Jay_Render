@@ -188,17 +188,6 @@ Jay_Render :: struct {
 
         // Material varies per instance, not per draw group. One mesh group
         // produces one indirect command for all cows.
-        // Compute tight local AABB for the cow mesh (world AABB per instance = transform * local AABB).
-        local_min := Vec3.{ 1.0e10,  1.0e10,  1.0e10};
-        local_max := Vec3.{-1.0e10, -1.0e10, -1.0e10};
-        for v: mesh.vertices {
-            local_min.x = min(local_min.x, v.position.x);
-            local_min.y = min(local_min.y, v.position.y);
-            local_min.z = min(local_min.z, v.position.z);
-            local_max.x = max(local_max.x, v.position.x);
-            local_max.y = max(local_max.y, v.position.y);
-            local_max.z = max(local_max.z, v.position.z);
-        }
         group_id := new_draw_group(*render.data, mesh_id);
         for i: 0..100 {
             for j: 0..100 {
@@ -208,30 +197,11 @@ Jay_Render :: struct {
                     rotation = to_quat(Radians.{0, 0, xx (i / (j + 1))}),
                     scale = Vec3.new(size),
                 });
-                // World AABB from 8 corners of local AABB.
-                world_min := Vec3.{ 1.0e10,  1.0e10,  1.0e10};
-                world_max := Vec3.{-1.0e10, -1.0e10, -1.0e10};
-                for corner: 0..7 {
-                    lx := ifx (corner & 1) != 0 then local_max.x else local_min.x;
-                    ly := ifx (corner & 2) != 0 then local_max.y else local_min.y;
-                    lz := ifx (corner & 4) != 0 then local_max.z else local_min.z;
-                    wp := transform * Vec4.new(Vec3.{lx, ly, lz}, 1.0);
-                    wpos := Vec3.{wp.x, wp.y, wp.z};
-                    world_min.x = min(world_min.x, wpos.x);
-                    world_min.y = min(world_min.y, wpos.y);
-                    world_min.z = min(world_min.z, wpos.z);
-                    world_max.x = max(world_max.x, wpos.x);
-                    world_max.y = max(world_max.y, wpos.y);
-                    world_max.z = max(world_max.z, wpos.z);
-                }
-                world_center := (world_min + world_max) * 0.5;
-                world_extents := (world_max - world_min) * 0.5;
                 new_mesh_instance(
                     *render.data,
                     group_id,
                     transform,
-                    world_center,
-                    world_extents,
+                    Vec4.new(get_translation(transform), size * 6.13),
                     materials[(i + j) % materials.count],
                 );
             }

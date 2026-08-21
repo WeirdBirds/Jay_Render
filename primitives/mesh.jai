@@ -41,8 +41,7 @@ new_mesh_instance :: (
     data: *Render_Data,
     group_id: u32,
     transform: Mat4,
-    world_center: Vec3,
-    world_extents: Vec3,
+    world_bounds: Vec4,
     material: Material_Handle
 ) -> u32 {
     #if DEBUG {
@@ -60,10 +59,7 @@ new_mesh_instance :: (
         flags = .NONE,
         material_index = material,
     };
-    data.bounds_cpu[instance_id] = .{
-        center = Vec4.new(world_center, 0),
-        extents = Vec4.new(world_extents, 0),
-    };
+    data.bounds_cpu[instance_id] = .{center_radius = world_bounds};
     data.instance_group_static_cpu[instance_id] = group_id;
     return instance_id;
 }
