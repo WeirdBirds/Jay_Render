@@ -1,5 +1,5 @@
 // Draw_Params mirrors common.slang's Draw_Params exactly (scalar layout,
-// 480 bytes: 17 GPU root pointers at offset 344..480). Shaders dereference
+// 484 bytes: 17 GPU root pointers at offset 348..484). Shaders dereference
 // the pushed pointer directly, so field order must never diverge.
 
 Draw_Params :: struct {
@@ -7,6 +7,7 @@ Draw_Params :: struct {
     instance_count:  u32;
     cull_mode:       u32;   // 0 = pass A (frustum + history), 1 = pass B (rescue retest)
     history_enabled: u32;   // camera-motion gate: 0 = frustum only
+    reset_counters:  u32;   // 1 = zero HiZ stats ring too (chain A only; chain B sets 0)
 
     frustum_planes: [6]Vec4;
 

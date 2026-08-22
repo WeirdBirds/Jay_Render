@@ -1,5 +1,4 @@
-// Hierarchical-Z occlusion culling support — stage 1: pyramid build + debug
-// counters only. Nothing is rejected yet; rendering is untouched.
+// Hierarchical-Z occlusion culling.
 //
 // The pyramid stores reverse-Z depth (Z-up left-handed projection: near -> 1.0,
 // far -> 0.0, depth test GREATER, clear 0.0). The conservative tile value is
@@ -11,9 +10,6 @@
 // source extent are written 0.0 (far) — unusable as occluders, conservative.
 
 HIZ_MAX_MIPS :: 16;
-// Slot for the counter-reset dispatch. The build dispatches use slots
-// 0..hiz.mips-1; this one is written once per frame and never rewritten.
-HIZ_RESET_SLOT :: 15;
 
 HiZ_Counters :: struct {
     base_texels: u32;   // threads that wrote the base level
@@ -58,8 +54,10 @@ HiZ_Data :: struct {
     // Pyramid base texel budget per long axis. The base follows the frame's
     // aspect ratio (budget scales the wider axis), so culling density stays
     // constant across window sizes; it is clamped to at most half of the
-    // render resolution per axis (see hiz_init).
-    hiz_base_texels: u32 = 500;
+    // render resolution per axis (see hiz_init). 1024 keeps coarse tiles from
+    // collapsing to sky-depth 0.0 too early — at 500 the min-reduce wiped out
+    // nearly all usable occluders (conf peaked at ~1.5% of draws).
+    hiz_base_texels: u32 = 1024;
 
     params:      [MAX_FRAMES_IN_FLIGHT][HIZ_MAX_MIPS]*HiZ_Params;
     params_gpu:  [MAX_FRAMES_IN_FLIGHT][HIZ_MAX_MIPS]Gpu_Ptr;
@@ -217,6 +215,29 @@ hiz_recreate :: (data: *Render_Data) {
     hiz_init(data);
 }
 
+// Read the GPU timestamp durations of the slot 3 frames ago (complete by
+// pacing). Logs only when something looks pathological (>4ms section).
+perf_frame_begin :: (data: *Render_Data) {
+    #if DEBUG {
+        frame_index := gpu_frame_slot();
+        p := data.perf[frame_index];
+        if !p.valid return;
+        ready_r, ms_r := gpu_timestamp_duration_ms(p.r0, p.r1);
+        ready_h, ms_h := gpu_timestamp_duration_ms(p.h0, p.h1);
+        if !ready_r || !ready_h return;
+        if p.rescued {
+            ready_p, ms_p := gpu_timestamp_duration_ms(p.p0, p.p1);
+            if ready_p && max(ms_r, max(ms_h, ms_p)) > 4.0 {
+                log("gpu-perf (rescue): renderA=% hiz=% renderB=%", ms_r, ms_h, ms_p);
+            }
+        } else {
+            if max(ms_r, ms_h) > 4.0 {
+                log("gpu-perf: renderA=% hiz=%", ms_r, ms_h);
+            }
+        }
+    }
+}
+
 // Read last frame's counters and log them. The slot the GPU filled three
 // frames ago is complete by pacing, and the entry can never race the reset
 // (the reset is GPU-side, ordered before this frame's adds).
@@ -225,19 +246,35 @@ hiz_frame_begin :: (data: *Render_Data) {
     if !hiz.created return;
 
     #if DEBUG {
-        frame_index := gpu_frame_index();
+        frame_index := gpu_frame_slot();
         counters := hiz.counters[frame_index];
+        // Chain B's reset must no longer wipe the ring. If these fail, the
+        // reset_counters gate regressed. (base==0 also happens legitimately
+        // right after a resize recreate, hence frames_logged warmup guard.)
+        if data.frames_logged > 3 && hiz.created {
+            assert(counters.base_texels > 0,
+                "hiz: base counter 0 — stats ring was wiped or pyramid build skipped");
+            assert(counters.rejected == counters.rescued + counters.confirmed,
+                tprint("hiz: conservation broken rej=% res=% conf=%",
+                    counters.rejected, counters.rescued, counters.confirmed));
+        }
         // Debug draw args via counters (build/prefix write counters[18]/[19]).
         dc := counters.per_dispatch[11]; // counters[18]
         tvv := counters.per_dispatch[12]; // counters[19]
-        log("hiz (slot %): base=% mip=% zero=% rej=% res=% conf=% hist=% drawn=% dc=% vis=% pd=% % % % % % %",
-            frame_index, counters.base_texels, counters.mip_texels, counters.zero_tiles,
-            counters.rejected, counters.rescued, counters.confirmed, counters.history,
-            counters.per_dispatch[9], dc, tvv,
-            counters.per_dispatch[0], counters.per_dispatch[1], counters.per_dispatch[2],
-            counters.per_dispatch[3], counters.per_dispatch[4], counters.per_dispatch[5],
-            counters.per_dispatch[6], counters.per_dispatch[7], counters.per_dispatch[8],
-            counters.per_dispatch[10]);
+        ms := data.last_frame_ms;
+        if data.frames_logged > 0 && ms > 0.000001 && ms < 100000 {   // first frame has no sane delta yet
+            fps_i: s64 = xx (1000.0 / ms + 0.5);
+            ms_fmt := FormatFloat.{ value = ms, trailing_width = 4 };
+            log("Frame %: %ms (%fps), base=% mip=% zero=% rej=% res=% conf=% hist=% drawn=% dc=% vis=% pd=% % % % % % %",
+                cast(s64) data.frames_logged, ms_fmt, fps_i,
+                counters.base_texels, counters.mip_texels, counters.zero_tiles,
+                counters.rejected, counters.rescued, counters.confirmed, counters.history,
+                counters.per_dispatch[9], dc, tvv,
+                counters.per_dispatch[0], counters.per_dispatch[1], counters.per_dispatch[2],
+                counters.per_dispatch[3], counters.per_dispatch[4], counters.per_dispatch[5],
+                counters.per_dispatch[6], counters.per_dispatch[7], counters.per_dispatch[8],
+                counters.per_dispatch[10]);
+        }
     }
 }
 
@@ -249,7 +286,7 @@ hiz_build :: (data: *Render_Data, cmd: Gpu_Command_Buffer) {
     hiz := *data.hiz;
     if !hiz.created return;
 
-    frame_index := gpu_frame_index();
+    frame_index := gpu_frame_slot();
 
     params := hiz.params[frame_index][0];
     params.counters = hiz.counters_gpu[frame_index];

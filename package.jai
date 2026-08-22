@@ -261,112 +261,86 @@ Jay_Render :: struct {
             scale = Vec3.new(1),
         });
 
-        #if DEBUG if engine.timer.delta_time > 0 log("% FPS", 1 / engine.timer.delta_time);
+        #if DEBUG {
+            if engine.timer.delta_time > 0 render.data.last_frame_ms = engine.timer.delta_time * 1000.0;
+        }
+        // Freeze the camera while the pixel-identical check runs (stages 1-2),
+        // otherwise the two compared frames differ by camera motion alone.
+        if render.data.compare_stage == 1 {
+            render.data.compare_transform = transform;
+        } else if render.data.compare_stage == 2 {
+            transform = render.data.compare_transform;
+        }
         camera_capture(camera, transform);
-        // Pixel-identical check at frame 300: same transform, on vs off, must be identical (no false positives).
-        if (!render.data.compare_done && render.frames_rendered == 300) {
-            log("compare: starting pixel-identical check (on vs off, same transform)");
-            render.data.probe_enabled = true;
-            gpu_wait_idle();
-            // On
-            savedOcc := render.data.occlusion_enabled;
-            render.data.occlusion_enabled = true;
-            camera_capture(camera, transform);
-            gpu_wait_idle();
-            if (render.data.probe_map == null || render.data.probe_bytes == 0) {
-                log("compare: probe not ready for on");
-            } else {
-                render.data.compare_bytes = render.data.probe_bytes;
-                render.data.compare_buf = cast(*u8) alloc(render.data.compare_bytes);
-                occluded_save_bytes := cast(s64) MAX_INSTANCES * 4;
-                occluded_save_u32 := cast(*u32) alloc(occluded_save_bytes);
-                memcpy(cast(*u8) occluded_save_u32, render.data.occluded_flags_cpu.data, occluded_save_bytes);
-                depth_save_bytes := render.data.depth_probe_bytes;
-                depth_save := cast(*u8) alloc(depth_save_bytes);
-                if (render.data.depth_probe_map != null) memcpy(depth_save, render.data.depth_probe_map, depth_save_bytes);
-                if (render.data.compare_buf != null) {
-                    memcpy(render.data.compare_buf, render.data.probe_map, render.data.compare_bytes);
-                    log("compare: saved on (% bytes)", render.data.compare_bytes);
-                    // Off, same transform
-                    render.data.occlusion_enabled = false;
-                    camera_capture(camera, transform);
-                    gpu_wait_idle();
-                    if (render.data.probe_map != null) {
-                        diffBytes: s64 = 0;
-                        pixelDiff: s64 = 0;
-                        totalPixels := render.data.compare_bytes / 4;
-                        for p: 0..totalPixels-1 {
-                            off := p*4;
-                            b0 := render.data.compare_buf[off+0];
-                            g0 := render.data.compare_buf[off+1];
-                            r0 := render.data.compare_buf[off+2];
-                            b1 := render.data.probe_map[off+0];
-                            g1 := render.data.probe_map[off+1];
-                            r1 := render.data.probe_map[off+2];
-                            if (b0 != b1 || g0 != g1 || r0 != r1) pixelDiff += 1;
-                            if (render.data.compare_buf[off] != render.data.probe_map[off]) diffBytes += 1;
-                            if (render.data.compare_buf[off+1] != render.data.probe_map[off+1]) diffBytes += 1;
-                            if (render.data.compare_buf[off+2] != render.data.probe_map[off+2]) diffBytes += 1;
-                            if (render.data.compare_buf[off+3] != render.data.probe_map[off+3]) diffBytes += 1;
-                        }
-                        log("compare: diffBytes=% pixelDiff=% totalPixels=%", diffBytes, pixelDiff, totalPixels);
-                        if (pixelDiff == 0) {
-                            log("compare: IDENTICAL - no false positives");
-                        } else {
-                            log("compare: DIFFERENT - % pixels differ (false occlusion)", pixelDiff);
-                            w, h := gpu_get_surface_extent();
-                            screenW := cast(s64) w;
-                            screenH := cast(s64) h;
-                            view := make_view(transform);
-                            proj := make_projection(camera);
-                            viewProj := proj * view;
-                            culledTotal: s64 = 0;
-                            falseCulled: s64 = 0;
-                            for id: 0..xx render.data.instance_pool.max-1 {
-                                if (occluded_save_u32[id] != 1) continue;
-                                culledTotal += 1;
-                                b := render.data.bounds_cpu[id];
-                                cv := view * Vec4.new(Vec3.{b.center_radius.x, b.center_radius.y, b.center_radius.z}, 1.0);
-                                d := -cv.z;
-                                r := b.center_radius.w;
-                                if (d - r <= 0.0) continue;
-                                c_clip := viewProj * Vec4.new(Vec3.{b.center_radius.x, b.center_radius.y, b.center_radius.z}, 1.0);
-                                if (c_clip.w <= 0.0) continue;
-                                c_ndc := Vec2.{c_clip.x / c_clip.w, c_clip.y / c_clip.w};
-                                cx := cast(s64) ((c_ndc.x * 0.5 + 0.5) * cast(float32) screenW);
-                                cy := cast(s64) ((c_ndc.y * 0.5 + 0.5) * cast(float32) screenH);
-                                foundDiff := false;
-                                for dy: -32..32 {
-                                    for dx: -32..32 {
-                                        x := cx + dx; y := cy + dy;
-                                        if (x < 0 || y < 0 || x >= screenW || y >= screenH) continue;
-                                        pIdx := y * screenW + x;
-                                        off2 := pIdx * 4;
-                                        if (off2+2 >= render.data.compare_bytes) continue;
-                                        b0 := render.data.compare_buf[off2+0];
-                                        g0 := render.data.compare_buf[off2+1];
-                                        r0 := render.data.compare_buf[off2+2];
-                                        b1 := render.data.probe_map[off2+0];
-                                        g1 := render.data.probe_map[off2+1];
-                                        r1 := render.data.probe_map[off2+2];
-                                        if (b0 != b1 || g0 != g1 || r0 != r1) { foundDiff = true; break; }
-                                    }
-                                    if (foundDiff) break;
-                                }
-                                if (foundDiff) falseCulled += 1;
-                                if (falseCulled < 5) {
-                                    log("false culled id=% center=(% % %) r=% ndc=(% %) screen=(% %)", cast(s64) id, b.center_radius.x, b.center_radius.y, b.center_radius.z, r, c_ndc.x, c_ndc.y, cx, cy);
-                                }
-                            }
-                            log("ground truth: culled=% falseCulled=%", culledTotal, falseCulled);
-                        }
+// Pixel-identical check: uses three NORMAL frames (no inline re-render, so
+// every frame acquires its own swapchain image — no validation hazards).
+//   stage 0 at frame 300: enable probe + occlusion, save nothing yet
+//   stage 1 at frame 301: copy "on" image + flags, switch occlusion off
+//   stage 2 at frame 302: compare, log, restore everything
+        if !render.data.compare_done {
+            if render.frames_rendered == 300 {
+                render.data.compare_stage = 1;
+                render.data.probe_enabled = true;
+                render.data.compare_saved_occ = render.data.occlusion_enabled;
+                render.data.occlusion_enabled = true;
+                log("compare: frame 300 - occlusion ON (probe armed)");
+            } else if render.frames_rendered == 301 && render.data.compare_stage == 1 {
+                gpu_wait_idle();  // previous frame's probe copy must be complete before CPU read
+                if render.data.probe_map != null && render.data.probe_bytes > 0 {
+                    render.data.compare_bytes = render.data.probe_bytes;
+                    if render.data.compare_buf == null {
+                        render.data.compare_buf = cast(*u8) alloc(render.data.compare_bytes);
                     }
-                    render.data.occlusion_enabled = savedOcc;
-                    free(cast(*u8) occluded_save_u32);
-                    free(depth_save);
+                    if render.data.occluded_flags_save == null {
+                        render.data.occluded_flags_save = cast(*u32) alloc(cast(s64) MAX_INSTANCES * 4);
+                    }
+                    memcpy(render.data.compare_buf, render.data.probe_map, render.data.compare_bytes);
+                    memcpy(cast(*u8) render.data.occluded_flags_save, render.data.occluded_flags_cpu.data, cast(s64) MAX_INSTANCES * 4);
+                    log("compare: frame 301 - saved ON image (% bytes), switching OFF", render.data.compare_bytes);
                 }
+                render.data.occlusion_enabled = false;
+                render.data.compare_stage = 2;
+            } else if render.frames_rendered == 302 && render.data.compare_stage == 2 {
+                render.data.compare_stage = 3;
+                gpu_wait_idle();  // this frame's OFF-image copy must be complete too
+                if render.data.probe_map != null && render.data.compare_buf != null {
+                    pixelDiff: s64 = 0;
+                    totalPixels := render.data.compare_bytes / 4;
+                    for p: 0..totalPixels-1 {
+                        off := p*4;
+                        b0 := render.data.compare_buf[off+0];
+                        g0 := render.data.compare_buf[off+1];
+                        r0 := render.data.compare_buf[off+2];
+                        b1 := render.data.probe_map[off+0];
+                        g1 := render.data.probe_map[off+1];
+                        r1 := render.data.probe_map[off+2];
+                        if b0 != b1 || g0 != g1 || r0 != r1 pixelDiff += 1;
+                    }
+                    if pixelDiff == 0 {
+                        log("compare: IDENTICAL - no false positives (% pixels)", totalPixels);
+                    } else {
+                        log("compare: DIFFERENT - %/% pixels differ (false occlusion)", pixelDiff, totalPixels);
+                    }
+                } else {
+                    log("compare: probe missing, check skipped");
+                }
+                // Restore. Free the big scratch HERE (same allocator context
+                // as the alloc above) — freeing in render_data_destroy crashes:
+                // different context at shutdown.
+                render.data.occlusion_enabled = render.data.compare_saved_occ;
+                render.data.probe_enabled = false;
+                if render.data.compare_buf != null {
+                    free(render.data.compare_buf);
+                    render.data.compare_buf = null;
+                    render.data.compare_bytes = 0;
+                }
+                if render.data.occluded_flags_save != null {
+                    free(render.data.occluded_flags_save);
+                    render.data.occluded_flags_save = null;
+                }
+                render.data.compare_done = true;
+                log("compare: done, settings restored");
             }
-            render.data.compare_done = true;
         }
         render.frames_rendered += 1;
     }

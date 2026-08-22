@@ -1,3 +1,13 @@
+// GPU timestamp pairs per frame section (main queue only — pool reset runs on
+// the main acquire submit, so writes must be same-queue ordered after it).
+Perf_Sections :: struct {
+    r0, r1: Gpu_Timestamp;   // render pass A
+    h0, h1: Gpu_Timestamp;   // hiz pyramid build
+    p0, p1: Gpu_Timestamp;   // render pass B
+    valid:   bool;
+    rescued: bool;
+}
+
 Vertex_Params :: struct {
     view_projection: Mat4;
 
@@ -70,6 +80,7 @@ Render_Data :: struct {
     occluded_flags_cpu: []u32;
     occluded_flags_gpu: Gpu_Ptr;   // persistent flags: 1 = pass-A rejected (now host-visible for debug)
     occlusion_enabled:  bool = true; // false => stage-1 path: frustum only, no rescue pass
+    history_active:     bool;      // hysteresis state of the history gate
     history_ready:      bool;      // pyramid exists and can back history predictions
     first_frame:        u32 = 1;
     prev_transform:     Mat4;
@@ -84,6 +95,10 @@ Render_Data :: struct {
     probe_bytes: s64 = 0;
     probe_frame: u32 = 0;
     compare_done: bool;
+    compare_stage: u32;
+    compare_saved_occ: bool;
+    compare_transform: Mat4;
+    occluded_flags_save: *u32;
     compare_buf: *u8;
     compare_bytes: s64;
     // Depth readback for ground-truth check
@@ -92,6 +107,10 @@ Render_Data :: struct {
     depth_probe_bytes: s64 = 0;
     depth_compare_buf: *u8;
     depth_compare_bytes: s64;
+    // Per-frame GPU timestamps (read 3 frames later when complete)
+    perf: [MAX_FRAMES_IN_FLIGHT]Perf_Sections;
+    last_frame_ms: float64 = 0;   // previous frame's CPU delta, for the Frame# log line
+    frames_logged: u64;       // monotonic frame counter for the log line
 
     instance_pool: Index_Pool;
     group_pool:    Index_Pool;
@@ -280,6 +299,8 @@ render_data_destroy :: (data: *Render_Data) {
     if data.compute_done != 0 gpu_destroy_semaphore(data.compute_done);
     free_gpu_cpu(data.occluded_flags_cpu.data);
     free_gpu_ptr(data.probe_gpu);
+    if data.compare_buf != null free(data.compare_buf);
+    if data.occluded_flags_save != null free(data.occluded_flags_save);
     free_gpu_ptr(data.depth_probe_gpu);
     if data.compare_buf != null free(data.compare_buf);
     if data.depth_compare_buf != null free(data.depth_compare_buf);

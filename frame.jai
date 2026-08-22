@@ -1,18 +1,22 @@
 HISTORY_MAX_POS_DELTA :: 0.05;   // world units (near plane is 0.1)
 HISTORY_MAX_ANGLE    :: 0.02;    // radians
+HISTORY_OFF_POS_DELTA :: 0.12;   // hysteresis: turn off only past this (prevents
+                                 // on/off flapping when velocity hovers at the limit)
+HISTORY_OFF_ANGLE     :: 0.05;
 
 render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Queue,
         image: Gpu_Texture_View, depth_view: Gpu_Texture_View,
         view_projection: Mat4, view: Mat4, frustum_planes: [6] Vec4,
         camera_transform: Mat4, camera_near: float32, camera_far: float32) {
 
-    frame_index := gpu_frame_index();
+    frame_index := gpu_frame_slot();
     #if DEBUG { assert(frame_index < MAX_FRAMES_IN_FLIGHT); }
     frame := *data.dynamic[frame_index];
 
     // Log the counters for the slot we are about to reuse (3 frames old, GPU
     // done via wait_next_frame). Must read before the reset dispatch zeroes it.
     hiz_frame_begin(data);
+    data.frames_logged += 1;
 
     // Pools reuse holes. Dispatch through their occupied extent and let the
     // cull pass reject destroyed instance slots.
@@ -43,11 +47,14 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     frame.params.ndc_coeffs = .{a, b};
     frame.params.hiz_epsilon = -0.022;
     frame.params.first_frame = data.first_frame;
+    frame.params.reset_counters = 1;   // chain A owns the stats-ring reset
     frame.params.occluded_flags = data.occluded_flags_gpu;
     frame.params.counters = data.hiz.counters_gpu[frame_index];
 
-    // Camera-motion gate. Compare the camera transform against the previous
-    // frame's: drift and the forward-axis swing both stale the history pyramid.
+    // Camera-motion gate with hysteresis: turn history ON below the tight
+    // threshold, OFF only past the loose one. Without this, velocity hovering
+    // at the limit flips the gate every other frame (2-submit <-> 4-submit
+    // alternation = visible stutter).
     history_enabled: u32 = 0;
     if data.occlusion_enabled && data.history_ready && data.hiz.created {
         px := Vec3.{camera_transform._14, camera_transform._24, camera_transform._34};
@@ -56,7 +63,14 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
         pfwd := normalize(Vec3.{data.prev_transform._11, data.prev_transform._12, data.prev_transform._13});
         pos_delta := length(px - pp);
         angle_delta := acos(clamp(dot(fwd, pfwd), -1.0, 1.0));
-        history_enabled = xx (pos_delta <= HISTORY_MAX_POS_DELTA && angle_delta <= HISTORY_MAX_ANGLE);
+        if data.history_active {
+            data.history_active = pos_delta <= HISTORY_OFF_POS_DELTA && angle_delta <= HISTORY_OFF_ANGLE;
+        } else {
+            data.history_active = pos_delta <= HISTORY_MAX_POS_DELTA && angle_delta <= HISTORY_MAX_ANGLE;
+        }
+        history_enabled = xx data.history_active;
+    } else {
+        data.history_active = false;
     }
     frame.params.history_enabled = history_enabled;
 
@@ -86,6 +100,8 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     frame.params_b.ndc_coeffs = frame.params.ndc_coeffs;
     frame.params_b.hiz_epsilon = -0.022;
     frame.params_b.first_frame = 0;
+    frame.params_b.reset_counters = 0; // must NOT wipe the ring: base/mip/zero/rej/hist
+                                       // were written earlier this frame and get read 3 frames later
     frame.params_b.occluded_flags = data.occluded_flags_gpu;
     frame.params_b.counters = data.hiz.counters_gpu[frame_index];
     for mip: 0..data.hiz.mips - 1 {
@@ -139,7 +155,6 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     prev_pyr := Gpu_Timeline_Pair.{data.compute_done, data.pyr_prev};
     gpu_submit(compute_cmd, signals = .[compute_done], waits = .[prev_pyr]);
 
-    // Main buffer: render + pyramid + rescue. Submission waits chain A.
     result, cmd := gpu_start_command_recording(main_queue);
     #if DEBUG { assert(result == .SUCCESS); }
 
@@ -198,6 +213,14 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
 
         result_b, compute_b := gpu_start_command_recording(compute_queue);
         #if DEBUG { assert(result_b == .SUCCESS); }
+
+        // Reset the SHARED scratch first. Chain B accumulates via atomic adds;
+        // without this it stacks onto pass A's counts and pass B re-draws the
+        // whole scene (was 9ms for a handful of rescued cows).
+        reset_pipeline_result_b := gpu_set_pipeline(compute_b, data.pipelines[0]);
+        #if DEBUG { assert(reset_pipeline_result_b == .SUCCESS); }
+        gpu_dispatch(compute_b, frame.params_b_gpu, u32.[xx gg, 1, 1]);
+        gpu_barrier(compute_b, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
         // Rescue chain B: retest every pass-A reject against the fresh pyramid.
         gpu_barrier(compute_b, .COMPUTE_SHADER, .COMPUTE_SHADER);
