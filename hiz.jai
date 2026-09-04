@@ -9,35 +9,7 @@
 // interior reduction is then an exact 2x2 block. Padding blocks beyond the
 // source extent are written 0.0 (far) — unusable as occluders, conservative.
 
-HIZ_MAX_MIPS :: 16;
-
-HiZ_Counters :: struct {
-    base_texels: u32;   // threads that wrote the base level
-    mip_texels:  u32;   // threads that wrote higher levels
-    zero_tiles:  u32;   // base tiles whose min is exactly 0 (uncovered => no occluder)
-    // Stage 2: occlusion stats. Written by the cull dispatches after the
-    // counter reset at the start of chain A; read back three frames later.
-    rejected:    u32;   // pass A rejected (deferred to pass B)
-    rescued:     u32;   // pass B drew (was rejected, fresh pyramid says visible)
-    confirmed:   u32;   // pass B kept occluded (fresh pyramid agrees)
-    history:     u32;   // pass A engaged the history test on a candidate
-    per_dispatch: [32]u32;   // debug: survivor count per dispatch (reset zeroes [0..31])
-}
-
-// Mirrors HiZ_Params in hiz_downsample.slang (scalar layout).
-HiZ_Params :: struct {
-    depth_view_index: u32;   // sampled depth view of the full-res depth buffer
-    sampler_index:    u32;   // nearest / clamp-to-edge sampler
-    src_view_index:   u32;   // storage view of source mip (mode >= 1)
-    dst_view_index:   u32;   // storage view of destination mip
-    src_width:        u32;
-    src_height:       u32;
-    dst_width:        u32;
-    dst_height:       u32;
-    mode:             u32;   // 0 = base from depth, 1 = mip-to-mip, 2 = reset
-    dispatch_index:   u32;   // 0 = base, 1..N-1 = mips (debug per-dispatch counter)
-    counters:         Gpu_Ptr;
-}
+#scope_module
 
 HiZ_Data :: struct {
     pyramid_textures: [HIZ_MAX_MIPS] Gpu_Texture;
@@ -54,10 +26,9 @@ HiZ_Data :: struct {
     // Pyramid base texel budget per long axis. The base follows the frame's
     // aspect ratio (budget scales the wider axis), so culling density stays
     // constant across window sizes; it is clamped to at most half of the
-    // render resolution per axis (see hiz_init). 1024 keeps coarse tiles from
-    // collapsing to sky-depth 0.0 too early — at 500 the min-reduce wiped out
-    // nearly all usable occluders (conf peaked at ~1.5% of draws).
-    hiz_base_texels: u32 = 1024;
+    // render resolution per axis (see hiz_init). 512 avoids coarse tiles
+    // collapsing to sky-depth 0.0 while keeping the reduction work bounded.
+    hiz_base_texels: u32 = 512;
 
     params:      [MAX_FRAMES_IN_FLIGHT][HIZ_MAX_MIPS]*HiZ_Params;
     params_gpu:  [MAX_FRAMES_IN_FLIGHT][HIZ_MAX_MIPS]Gpu_Ptr;
@@ -68,41 +39,12 @@ HiZ_Data :: struct {
     created:  bool;
 }
 
-// Round up to the next even value. Base dims stay even so every mip reduction
-// is an exact 2x2 block (up to padding blocks written as 0).
-hiz_even_dim :: (d: u32) -> u32 {
-    return (d + 1) / 2 * 2;
-}
-
-// Next pyramid level dim: ceil half of the parent, rounded to even.
-hiz_next_dim :: (d: u32) -> u32 {
-    if d <= 2 return 1;
-    half := (d + 1) / 2;
-    return (half + 1) / 2 * 2;
-}
-
-hiz_mip_dim :: (dim: u32, mip: u32) -> u32 {
-    if mip == 0 return dim;
-    d := dim;
-    for 0..mip - 1 {
-        d = hiz_next_dim(d);
-    }
-    return d;
-}
-
-hiz_mip_count :: (w: u32, h: u32) -> u32 {
-    mips: u32 = 1;
-    d := max(w, h);
-    while d > 1 {
-        d = hiz_next_dim(d);
-        mips += 1;
-    }
-    return mips;
-}
-
 hiz_init :: (data: *Render_Data) {
     hiz := *data.hiz;
     #if DEBUG { assert(hiz.pyramid_textures[0] == 0, "hiz_init: pyramid already exists"); }
+
+    full_w, full_h := gpu_get_surface_extent();
+    if full_w == 0 || full_h == 0 return;
 
     if hiz.params[0][0] == null {
         for i: 0..MAX_FRAMES_IN_FLIGHT - 1 {
@@ -118,18 +60,19 @@ hiz_init :: (data: *Render_Data) {
                 hiz.params[i][slot] = hiz.params[i][0] + slot;
                 hiz.params_gpu[i][slot] = cast(Gpu_Ptr)(cast(u64)hiz.params_gpu[i][0] + cast(u64)size_of(HiZ_Params) * cast(u64)slot);
             }
-            hiz.counters[i], hiz.counters_gpu[i] = gpu_malloc(HiZ_Counters);
+            assert(hiz.params[i][0] != null && hiz.params_gpu[i][0] != 0, "hiz: params allocation failed");
             #if DEBUG {
-                assert(hiz.params[i][0] != null && hiz.params_gpu[i][0] != 0, "hiz: params allocation failed");
+                hiz.counters[i], hiz.counters_gpu[i] = gpu_malloc(HiZ_Counters);
                 assert(hiz.counters[i] != null && hiz.counters_gpu[i] != 0, "hiz: counters allocation failed");
+            } else {
+                // Release: no GPU->CPU telemetry. counters pointer stays 0 so
+                // the shaders skip every InterlockedAdd; nothing is allocated.
+                hiz.counters[i] = null;
+                hiz.counters_gpu[i] = 0;
             }
         }
     }
 
-
-    full_w, full_h := gpu_get_surface_extent();
-
-    if full_w == 0 || full_h == 0 return;
 
     hiz.full_width = full_w;
     hiz.full_height = full_h;
@@ -156,12 +99,12 @@ hiz_init :: (data: *Render_Data) {
             mip_count = 1,
             usage = .SAMPLED | .STORAGE,
         }, label = tprint("Jay_Render hiz mip %", mip));
-        #if DEBUG { assert(result == .SUCCESS && tex != 0, "hiz: pyramid texture creation failed"); }
+        assert(result == .SUCCESS && tex != 0, "hiz: pyramid texture creation failed");
         hiz.pyramid_textures[mip] = tex;
 
         hiz.mip_views[mip] = gpu_texture_view(tex);
 
-        #if DEBUG { assert(hiz.mip_views[mip] != 0, "hiz: pyramid view creation failed"); }
+        assert(hiz.mip_views[mip] != 0, "hiz: pyramid view creation failed");
     }
 
     // Native D32 view of the depth buffer. Sampling depth with a plain
@@ -171,7 +114,7 @@ hiz_init :: (data: *Render_Data) {
 
     hiz.depth_view = gpu_texture_view(render.viewport.depth_buffer);
 
-    #if DEBUG { assert(hiz.depth_view != 0, "hiz: depth view creation failed"); }
+    assert(hiz.depth_view != 0, "hiz: depth view creation failed");
 
 
     if hiz.sampler == 0 {
@@ -180,7 +123,7 @@ hiz_init :: (data: *Render_Data) {
             address_mode_u = .CLAMP_TO_EDGE, address_mode_v = .CLAMP_TO_EDGE, address_mode_w = .CLAMP_TO_EDGE,
             mip_lod_bias = 0, mip_lod = 0, enable_anisotropy = false,
         }, "Jay_Render hiz nearest");
-        #if DEBUG { assert(hiz.sampler != 0, "hiz: sampler creation failed"); }
+        assert(hiz.sampler != 0, "hiz: sampler creation failed");
     }
 
     hiz.pipeline = data.pipelines[6];
@@ -191,7 +134,6 @@ hiz_init :: (data: *Render_Data) {
 
 hiz_destroy :: (data: *Render_Data) {
     hiz := *data.hiz;
-    if !hiz.created return;
 
     for textures: hiz.pyramid_textures {
         if textures != 0 gpu_free(textures);
@@ -200,7 +142,7 @@ hiz_destroy :: (data: *Render_Data) {
     for i: 0..MAX_FRAMES_IN_FLIGHT - 1 {
         if hiz.params[i][0] != null {
             free_gpu_cpu(hiz.params[i][0]);
-            free_gpu_cpu(hiz.counters[i]);
+            if hiz.counters[i] != null free_gpu_cpu(hiz.counters[i]);
         }
     }
     // depth_view is owned by the depth texture and dies with it.
@@ -210,38 +152,14 @@ hiz_destroy :: (data: *Render_Data) {
 // Extent changed (framebuffer resize). The old depth texture and its views are
 // already gone; rebuild the pyramid and the depth read view against the new one.
 hiz_recreate :: (data: *Render_Data) {
-    if !data.hiz.created return;
     hiz_destroy(data);
     hiz_init(data);
-}
-
-// Read the GPU timestamp durations of the slot 3 frames ago (complete by
-// pacing). Logs only when something looks pathological (>4ms section).
-perf_frame_begin :: (data: *Render_Data) {
-    #if DEBUG {
-        frame_index := gpu_frame_slot();
-        p := data.perf[frame_index];
-        if !p.valid return;
-        ready_r, ms_r := gpu_timestamp_duration_ms(p.r0, p.r1);
-        ready_h, ms_h := gpu_timestamp_duration_ms(p.h0, p.h1);
-        if !ready_r || !ready_h return;
-        if p.rescued {
-            ready_p, ms_p := gpu_timestamp_duration_ms(p.p0, p.p1);
-            if ready_p && max(ms_r, max(ms_h, ms_p)) > 4.0 {
-                log("gpu-perf (rescue): renderA=% hiz=% renderB=%", ms_r, ms_h, ms_p);
-            }
-        } else {
-            if max(ms_r, ms_h) > 4.0 {
-                log("gpu-perf: renderA=% hiz=%", ms_r, ms_h);
-            }
-        }
-    }
 }
 
 // Read last frame's counters and log them. The slot the GPU filled three
 // frames ago is complete by pacing, and the entry can never race the reset
 // (the reset is GPU-side, ordered before this frame's adds).
-hiz_frame_begin :: (data: *Render_Data) {
+hiz_frame_begin :: (data: *Render_Data, delta_time: float64) {
     hiz := *data.hiz;
     if !hiz.created return;
 
@@ -261,19 +179,28 @@ hiz_frame_begin :: (data: *Render_Data) {
         // Debug draw args via counters (build/prefix write counters[18]/[19]).
         dc := counters.per_dispatch[11]; // counters[18]
         tvv := counters.per_dispatch[12]; // counters[19]
-        ms := data.last_frame_ms;
-        if data.frames_logged > 0 && ms > 0.000001 && ms < 100000 {   // first frame has no sane delta yet
+        if data.frames_logged > 0 && delta_time > 0 {
+            ms := delta_time * 1000.0;
             fps_i: s64 = xx (1000.0 / ms + 0.5);
             ms_fmt := FormatFloat.{ value = ms, trailing_width = 4 };
             log("Frame %: %ms (%fps), base=% mip=% zero=% rej=% res=% conf=% hist=% drawn=% dc=% vis=% pd=% % % % % % %",
                 cast(s64) data.frames_logged, ms_fmt, fps_i,
                 counters.base_texels, counters.mip_texels, counters.zero_tiles,
                 counters.rejected, counters.rescued, counters.confirmed, counters.history,
-                counters.per_dispatch[9], dc, tvv,
+                counters.per_dispatch[16], dc, tvv,
                 counters.per_dispatch[0], counters.per_dispatch[1], counters.per_dispatch[2],
                 counters.per_dispatch[3], counters.per_dispatch[4], counters.per_dispatch[5],
                 counters.per_dispatch[6], counters.per_dispatch[7], counters.per_dispatch[8],
                 counters.per_dispatch[10]);
+        }
+    } else {
+        // Release build: per-frame FPS line only. No GPU counter readback —
+        // delta_time is CPU-side, so this costs nothing on the GPU timeline.
+        if data.frames_logged > 0 && delta_time > 0 {
+            ms := delta_time * 1000.0;
+            fps_i: s64 = xx (1000.0 / ms + 0.5);
+            ms_fmt := FormatFloat.{ value = ms, trailing_width = 4 };
+            log("Frame %: %ms (%fps)", cast(s64) data.frames_logged, ms_fmt, fps_i);
         }
     }
 }
@@ -334,4 +261,68 @@ hiz_build :: (data: *Render_Data, cmd: Gpu_Command_Buffer) {
         gy = max((params_mip.dst_height + 7) / 8, 1);
         gpu_dispatch(cmd, hiz.params_gpu[frame_index][mip], u32.[gx, gy, 1]);
     }
+}
+
+#scope_file
+
+HIZ_MAX_MIPS :: 16;
+
+HiZ_Counters :: struct {
+    base_texels: u32;   // threads that wrote the base level
+    mip_texels:  u32;   // threads that wrote higher levels
+    zero_tiles:  u32;   // base tiles whose min is exactly 0 (uncovered => no occluder)
+    // Stage 2: occlusion stats. Written by the cull dispatches after the
+    // counter reset at the start of chain A; read back three frames later.
+    rejected:    u32;   // pass A rejected (deferred to pass B)
+    rescued:     u32;   // pass B drew (was rejected, fresh pyramid says visible)
+    confirmed:   u32;   // pass B kept occluded (fresh pyramid agrees)
+    history:     u32;   // pass A engaged the history test on a candidate
+    per_dispatch: [32]u32;   // debug: survivor count per dispatch (reset zeroes [0..31])
+}
+
+// Mirrors HiZ_Params in hiz_downsample.slang (scalar layout).
+HiZ_Params :: struct {
+    depth_view_index: u32;   // sampled depth view of the full-res depth buffer
+    sampler_index:    u32;   // nearest / clamp-to-edge sampler
+    src_view_index:   u32;   // storage view of source mip (mode >= 1)
+    dst_view_index:   u32;   // storage view of destination mip
+    src_width:        u32;
+    src_height:       u32;
+    dst_width:        u32;
+    dst_height:       u32;
+    mode:             u32;   // 0 = base from depth, 1 = mip-to-mip
+    dispatch_index:   u32;   // 0 = base, 1..N-1 = mips (debug per-dispatch counter)
+    counters:         Gpu_Ptr;
+}
+
+// Round up to the next even value. Base dims stay even so every mip reduction
+// is an exact 2x2 block (up to padding blocks written as 0).
+hiz_even_dim :: (d: u32) -> u32 {
+    return (d + 1) / 2 * 2;
+}
+
+// Next pyramid level dim: ceil half of the parent, rounded to even.
+hiz_next_dim :: (d: u32) -> u32 {
+    if d <= 2 return 1;
+    half := (d + 1) / 2;
+    return (half + 1) / 2 * 2;
+}
+
+hiz_mip_dim :: (dim: u32, mip: u32) -> u32 {
+    if mip == 0 return dim;
+    d := dim;
+    for 0..mip - 1 {
+        d = hiz_next_dim(d);
+    }
+    return d;
+}
+
+hiz_mip_count :: (w: u32, h: u32) -> u32 {
+    mips: u32 = 1;
+    d := max(w, h);
+    while d > 1 {
+        d = hiz_next_dim(d);
+        mips += 1;
+    }
+    return mips;
 }

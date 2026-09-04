@@ -1,13 +1,10 @@
-HISTORY_MAX_POS_DELTA :: 0.05;   // world units (near plane is 0.1)
-HISTORY_MAX_ANGLE    :: 0.02;    // radians
-HISTORY_OFF_POS_DELTA :: 0.12;   // hysteresis: turn off only past this (prevents
-                                 // on/off flapping when velocity hovers at the limit)
-HISTORY_OFF_ANGLE     :: 0.05;
+#scope_module
 
 render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Queue,
         image: Gpu_Texture_View, depth_view: Gpu_Texture_View,
         view_projection: Mat4, view: Mat4, frustum_planes: [6] Vec4,
-        camera_transform: Mat4, camera_near: float32, camera_far: float32) {
+        camera_transform: Mat4, camera_near: float32, camera_far: float32,
+        delta_time: float64) {
 
     frame_index := gpu_frame_slot();
     #if DEBUG { assert(frame_index < MAX_FRAMES_IN_FLIGHT); }
@@ -15,7 +12,7 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
 
     // Log the counters for the slot we are about to reuse (3 frames old, GPU
     // done via wait_next_frame). Must read before the reset dispatch zeroes it.
-    hiz_frame_begin(data);
+    hiz_frame_begin(data, delta_time);
     data.frames_logged += 1;
 
     // Pools reuse holes. Dispatch through their occupied extent and let the
@@ -32,7 +29,6 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     frame.vertex_params.view_projection = view_projection;
 
     w, h := gpu_get_surface_extent();
-    frame.params.screen_size = .{xx w, xx h};
     if data.hiz.created {
         frame.params.hiz_base_size = .{xx data.hiz.base_width, xx data.hiz.base_height};
         frame.params.hiz_levels = data.hiz.mips;
@@ -58,9 +54,9 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     history_enabled: u32 = 0;
     if data.occlusion_enabled && data.history_ready && data.hiz.created {
         px := Vec3.{camera_transform._14, camera_transform._24, camera_transform._34};
-        fwd := normalize(Vec3.{camera_transform._11, camera_transform._12, camera_transform._13});
+        fwd := normalize(Vec3.{camera_transform._11, camera_transform._21, camera_transform._31});
         pp := Vec3.{data.prev_transform._14, data.prev_transform._24, data.prev_transform._34};
-        pfwd := normalize(Vec3.{data.prev_transform._11, data.prev_transform._12, data.prev_transform._13});
+        pfwd := normalize(Vec3.{data.prev_transform._11, data.prev_transform._21, data.prev_transform._31});
         pos_delta := length(px - pp);
         angle_delta := acos(clamp(dot(fwd, pfwd), -1.0, 1.0));
         if data.history_active {
@@ -94,7 +90,6 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     frame.params_b.view = view;
     frame.params_b.cull_mode = 1;
     frame.params_b.history_enabled = 0;
-    frame.params_b.screen_size = frame.params.screen_size;
     frame.params_b.hiz_base_size = frame.params.hiz_base_size;
     frame.params_b.hiz_levels = frame.params.hiz_levels;
     frame.params_b.ndc_coeffs = frame.params.ndc_coeffs;
@@ -188,8 +183,6 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     // Pyramid from this frame's depth (reverse-Z min-reduce).
     hiz_build(data, cmd);
 
-    #if DEBUG { if data.probe_enabled { probe_capture(data, cmd); depth_probe_capture(data, cmd); } }
-
     // Main-A: render + pyramid. Submit it before recording the rescue chain so
     // the pyramid read by pass B is ordered after the writes on the timeline.
     if !data.occlusion_enabled {
@@ -276,111 +269,18 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
 
         gpu_end_render_pass(cmd_b);
 
-        #if DEBUG { if data.probe_enabled { probe_capture(data, cmd_b); depth_probe_capture(data, cmd_b); } }
-
         gpu_submit_and_present(cmd_b, waits = .[rescue_done]);
     }
-
-    #if DEBUG { probe_dump(data); }
 
     data.prev_transform = camera_transform;
     data.first_frame = 0;
     data.history_ready = data.hiz.created;
 }
 
-// Copy the presented swapchain image into a small host-readable buffer, so the
-// frame's actual pixels can be verified independently of the display.
-probe_capture :: (data: *Render_Data, cmd: Gpu_Command_Buffer) {
-    if !data.probe_map {
-        extent := gpu_swapchain_extent();
-        bytes := cast(s64) extent[0] * extent[1] * 4;
-        data.probe_map, data.probe_gpu = gpu_malloc(bytes, .READBACK);
-        data.probe_bytes = bytes;
-    }
+#scope_file
 
-    // Ensure color writes have completed before the transfer read.
-    gpu_barrier(cmd, .COLOR_ATTACHMENT_OUTPUT, .TRANSFER);
-    copy_result := gpu_copy_from_texture(cmd, data.probe_gpu, gpu_swapchain_image());
-    #if DEBUG { assert(copy_result == .SUCCESS, "probe: copy failed"); }
-    gpu_barrier(cmd, .TRANSFER, .HOST);
-}
-
-depth_probe_capture :: (data: *Render_Data, cmd: Gpu_Command_Buffer) {
-    if !data.depth_probe_map {
-        w, h := gpu_get_surface_extent();
-        bytes := cast(s64) w * h * 4;
-        data.depth_probe_map, data.depth_probe_gpu = gpu_malloc(bytes, .READBACK);
-        data.depth_probe_bytes = bytes;
-    }
-    // Depth writes (late fragment) -> transfer
-    gpu_barrier(cmd, .LATE_FRAGMENT_TESTS, .TRANSFER);
-    depth_tex := render.viewport.depth_buffer;
-    if depth_tex != 0 {
-        copy_result := gpu_copy_from_texture(cmd, data.depth_probe_gpu, depth_tex);
-        #if DEBUG { assert(copy_result == .SUCCESS, "depth probe copy failed"); }
-        gpu_barrier(cmd, .TRANSFER, .HOST);
-    }
-}
-
-// Dump a coarse histogram of the probe buffer. The buffer holds the frame that
-// used it three frames ago (pacing guarantees completion), so the read can
-// never race the in-flight copy.
-probe_dump :: (data: *Render_Data) {
-    if !data.probe_map return;
-
-    data.probe_frame += 1;
-    if data.probe_frame % 300 != 7 return;
-
-    extent := gpu_swapchain_extent();
-    w := cast(s64) extent[0];
-    h := cast(s64) extent[1];
-    // Sample center 64x64 and also whole-image max to catch small cows.
-    cx := w/2; cy := h/2;
-    lit: u64 = 0;
-    sum_r, sum_g, sum_b: u64 = 0, 0, 0;
-    max_luma: u32 = 0;
-    center_r, center_g, center_b: u8 = 0, 0, 0;
-    samples: u64 = 0;
-    for dy: -32..32 {
-        for dx: -32..32 {
-            x := cx + dx; y := cy + dy;
-            if x < 0 || y < 0 || x >= w || y >= h continue;
-            idx := y * w + x;
-            off := idx * 4;
-            if off + 3 >= data.probe_bytes continue;
-            b := data.probe_map[off + 0];
-            g := data.probe_map[off + 1];
-            r := data.probe_map[off + 2];
-            sum_r += xx r; sum_g += xx g; sum_b += xx b;
-            samples += 1;
-            if dx == 0 && dy == 0 { center_r = r; center_g = g; center_b = b; }
-            luma := (cast(u64) r) + (cast(u64) g) + (cast(u64) b);
-            if luma > xx (max_luma) { max_luma = cast(u32) luma; }
-            if r != 0 || g != 0 || b != 0 { lit += 1; }
-        }
-    }
-    // Also scan every 64th pixel for global max (cheap full-image probe).
-    gmax: u32 = max_luma;
-    ysteps := (h + 63) / 64;
-    xsteps := (w + 63) / 64;
-    for yi: 0..(ysteps - 1) {
-        for xi: 0..(xsteps - 1) {
-            y := yi * 64;
-            x := xi * 64;
-            idx := y * w + x;
-            off := idx * 4;
-            if off + 3 >= data.probe_bytes continue;
-            b := data.probe_map[off + 0];
-            g := data.probe_map[off + 1];
-            r := data.probe_map[off + 2];
-            luma := (cast(u64) r) + (cast(u64) g) + (cast(u64) b);
-            if luma > xx (gmax) { gmax = cast(u32) luma; }
-        }
-    }
-    if samples == 0 { samples = 1; }
-    pct := 100.0 * cast(float64) lit / cast(float64) samples;
-    avg_r := sum_r / samples;
-    avg_g := sum_g / samples;
-    avg_b := sum_b / samples;
-    log("probe: center=% % % avg=% % % lit=% pct=% gmax=% max=%", cast(u64) center_r, cast(u64) center_g, cast(u64) center_b, avg_r, avg_g, avg_b, lit, pct, cast(u64) gmax, cast(u64) max_luma);
-}
+HISTORY_MAX_POS_DELTA :: 0.05;   // world units (near plane is 0.1)
+HISTORY_MAX_ANGLE    :: 0.02;    // radians
+HISTORY_OFF_POS_DELTA :: 0.12;   // hysteresis: turn off only past this (prevents
+                                 // on/off flapping when velocity hovers at the limit)
+HISTORY_OFF_ANGLE     :: 0.05;

@@ -1,14 +1,12 @@
 Gpu_Heap :: (capacity: s64, alignment: s64 = 8, memory_type: Memory_Type = .DEFAULT) -> Allocator {
-    #if DEBUG {
-        assert(capacity > 0, "Gpu_Heap capacity must be positive");
-        assert(alignment > 0, "Gpu_Heap alignment must be positive");
-        assert(memory_type != .GPU, "Gpu_Heap requires CPU-visible memory");
-    }
+    assert(capacity > 0, "Gpu_Heap capacity must be positive");
+    assert(alignment > 0, "Gpu_Heap alignment must be positive");
+    assert(memory_type != .GPU, "Gpu_Heap requires CPU-visible memory");
 
     heap: *Gpu_Heap_Data = New(Gpu_Heap_Data);
     heap.owner_allocator = context.allocator;
     heap.cpu_base, heap.gpu_base = gpu_malloc(capacity, memory_type);
-    #if DEBUG { assert(heap.cpu_base != null && heap.gpu_base != 0, "Gpu_Heap: GPU allocation failed"); }
+    assert(heap.cpu_base != null && heap.gpu_base != 0, "Gpu_Heap: GPU allocation failed");
 
     heap.capacity = capacity;
     heap.minimum_capacity = capacity;
@@ -53,25 +51,6 @@ gpu_heap_reserve :: (allocator: Allocator, required_capacity: s64) -> bool {
     old_capacity := data.capacity;
     if !heap_reallocate_storage(data, target) return false;
     heap_free_raw(data, old_capacity, target - old_capacity);
-    return true;
-}
-
-// Explicit trim only. Never call this per frame. It preserves offsets and
-// declines to shrink when live allocations would exceed the target buffer.
-gpu_heap_trim :: (allocator: Allocator, required_capacity: s64 = 0) -> bool {
-    data: *Gpu_Heap_Data = allocator.data;
-    if !data || data.capacity <= data.minimum_capacity return false;
-
-    required_capacity = max(required_capacity, heap_high_water_mark(data));
-    target := max(data.minimum_capacity, required_capacity);
-    target = max(target, data.capacity / 2);
-    target = align_forward(target, data.alignment);
-
-    if target >= data.capacity return false;
-
-    old_capacity := data.capacity;
-    if !heap_reallocate_storage(data, target) return false;
-    heap_trim_free_tail(data, old_capacity, target);
     return true;
 }
 
@@ -164,17 +143,6 @@ heap_high_water_mark :: (data: *Gpu_Heap_Data) -> s64 {
         if block.offset + block.size == data.capacity return block.offset;
     }
     return data.capacity;
-}
-
-heap_trim_free_tail :: (data: *Gpu_Heap_Data, old_capacity: s64, new_capacity: s64) {
-    for *block, index: data.free_list {
-        if block.offset + block.size != old_capacity continue;
-
-        #if DEBUG { assert(block.offset <= new_capacity, "Gpu_Heap trim would discard a live allocation"); }
-        block.size = new_capacity - block.offset;
-        if block.size == 0 array_ordered_remove_by_index(*data.free_list, index);
-        return;
-    }
 }
 
 heap_allocate_aligned :: (data: *Gpu_Heap_Data, payload_size: s64) -> *void {
@@ -340,12 +308,13 @@ heap_proc :: (mode: Allocator_Mode, size: s64, old_size: s64, old_memory: *void,
                 }
             }
 
-            // The allocator contract permits a moved CPU pointer. Durable GPU
-            // references must use offsets/handles, never this transient pointer.
+            // Allocation may grow and relocate the backing buffer. Rebuild the
+            // source pointer from its stable offset before copying or freeing.
             new_memory := heap_proc(.ALLOCATE, size, 0, null, allocator_data);
             if !new_memory return null;
-            memcpy(new_memory, old_memory, old_size);
-            heap_proc(.FREE, 0, 0, old_memory, allocator_data);
+            source := data.cpu_base + payload_offset;
+            memcpy(new_memory, source, old_size);
+            heap_proc(.FREE, 0, 0, source, allocator_data);
             return new_memory;
         }
 

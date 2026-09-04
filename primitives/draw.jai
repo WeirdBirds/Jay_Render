@@ -1,5 +1,17 @@
+new_draw_group :: (data: *Render_Data, mesh_id: u32) -> u32 {
+    assert(data.group_pool.thumbstones.count > 0 || data.group_pool.max < MAX_GROUPS,
+        "Jay_Render: MAX_GROUPS reached");
+
+    group_id := get_index(*data.group_pool);
+    data.groups_cpu[group_id] = .{mesh_id = mesh_id};
+    #if DEBUG { assert(group_id < MAX_GROUPS); }
+    return group_id;
+}
+
+#scope_module
+
 // Draw_Params mirrors common.slang's Draw_Params exactly (scalar layout,
-// 484 bytes: 17 GPU root pointers at offset 348..484). Shaders dereference
+// 476 bytes: 17 GPU root pointers at offset 340..476). Shaders dereference
 // the pushed pointer directly, so field order must never diverge.
 
 Draw_Params :: struct {
@@ -14,7 +26,6 @@ Draw_Params :: struct {
     // Culling helpers (Z-up LH, reverse-Z: near -> 1.0, far -> 0.0).
     view_projection: Mat4;  // full VP (matches the render pass)
     view:            Mat4;  // view matrix (sphere -> view-space depth)
-    screen_size:     Vec2;  // full-res framebuffer size in pixels
     hiz_base_size:   Vec2;  // pyramid base dims
     ndc_coeffs:      Vec2;  // reverse-Z coefficients: revz(d) = coeffs.y / d - coeffs.x
     hiz_epsilon:     float32; // depth slack against the tile min (never culls past it)
@@ -63,16 +74,4 @@ Draw_Indexed_Command :: struct {
     vertex_offset:  u32;
     first_instance: u32;
     padding:        u32;
-}
-
-new_draw_group :: (data: *Render_Data, mesh_id: u32) -> u32 {
-    #if DEBUG {
-        assert(data.group_pool.thumbstones.count > 0 || data.group_pool.max < MAX_GROUPS,
-            "Jay_Render: MAX_GROUPS reached");
-    }
-
-    group_id := get_index(*data.group_pool);
-    data.groups_cpu[group_id] = .{mesh_id = mesh_id};
-    #if DEBUG { assert(group_id < MAX_GROUPS); }
-    return group_id;
 }

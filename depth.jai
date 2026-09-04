@@ -1,3 +1,5 @@
+#scope_module
+
 create_depth_buffer :: () {
     width, height := gpu_get_surface_extent();
     if width == 0 || height == 0 {
@@ -7,12 +9,12 @@ create_depth_buffer :: () {
     result, texture := gpu_create_texture(.{
         dimensions = .[width, height, 1],
         format = .D32_SFLOAT,
-        usage = .DEPTH_STENCIL_ATTACHMENT | .SAMPLED | .TRANSFER_SRC,
+        usage = .DEPTH_STENCIL_ATTACHMENT | .SAMPLED,
     }, label = "Jay_Render depth buffer");
-    #if DEBUG { assert(result == .SUCCESS && texture != 0); }
+    assert(result == .SUCCESS && texture != 0, "Jay_Render depth texture creation failed");
 
     view := gpu_texture_view(texture);
-    #if DEBUG { assert(view != 0); }
+    assert(view != 0, "Jay_Render depth view creation failed");
 
     render.viewport.depth_buffer = texture;
     render.viewport.depth = view;

@@ -1,3 +1,5 @@
+#scope_module
+
 Projection_Type :: enum {
     PERSPECTIVE;
     ORTHOGRAPHIC;
@@ -15,7 +17,15 @@ Camera :: struct {
     aspect_ratio: float32 = 1920.0/1080.0;
 }
 
-camera_capture :: (camera: Camera, transform: Mat4) {
+camera_capture :: (camera: Camera, transform: Mat4, delta_time: float64) {
+    assert(camera.target != null, "Jay_Render: camera target is required");
+    assert(camera.aspect_ratio > 0, "Jay_Render: camera aspect ratio must be positive");
+    assert(camera.near > 0 && camera.far > camera.near, "Jay_Render: camera clip range is invalid");
+    if camera.projection == .PERSPECTIVE {
+        assert(camera.fov > 0 && camera.fov < PI, "Jay_Render: camera field of view is invalid");
+    } else {
+        assert(camera.ortho_size > 0, "Jay_Render: camera orthographic size must be positive");
+    }
 
     v := make_view(transform);
     p := make_projection(camera);
@@ -24,8 +34,10 @@ camera_capture :: (camera: Camera, transform: Mat4) {
 
     frustum_planes := get_frustum_planes(view_projection);
     render_frame(*render.data, render.queues.main, render.queues.compute, camera.target.image, camera.target.depth,
-        view_projection, v, frustum_planes, transform, camera.near, camera.far);
+        view_projection, v, frustum_planes, transform, camera.near, camera.far, delta_time);
 }
+
+#scope_file
 
 make_projection :: (using camera: Camera) -> Mat4 {
     if projection == .PERSPECTIVE {
@@ -61,12 +73,10 @@ make_projection :: (using camera: Camera) -> Mat4 {
 make_view :: (transform: Mat4) -> Mat4 {
     result: Mat4 = .{};
 
-    // Row 0 = right    = transform row 1
-    result._11 = transform._21;  result._12 = transform._22;  result._13 = transform._23;
-    // Row 1 = up       = transform row 2
-    result._21 = transform._31;  result._22 = transform._32;  result._23 = transform._33;
-    // Row 2 = -forward = -transform row 0
-    result._31 = -transform._11; result._32 = -transform._12; result._33 = -transform._13;
+    // Pose stores basis in columns. View matrix stores inverse basis in rows.
+    result._11 = transform._12;  result._12 = transform._22;  result._13 = transform._32; // right
+    result._21 = transform._13;  result._22 = transform._23;  result._23 = transform._33; // up
+    result._31 = -transform._11; result._32 = -transform._21; result._33 = -transform._31; // -forward
 
     pos_x := transform._14;  pos_y := transform._24;  pos_z := transform._34;
 
@@ -77,26 +87,6 @@ make_view :: (transform: Mat4) -> Mat4 {
 
     return result;
 }
-
-make_view_to :: (from: Vec3, target: Vec3, up: Vec3 = UP) -> Mat4 {
-    fwd := normalize(target - from);
-    right := normalize(cross(up, fwd));
-    cam_up := cross(fwd, right); 
-
-    result: Mat4 = .{};
-
-    result._11 = right.x;   result._12 = right.y;   result._13 = right.z;
-    result._21 = cam_up.x;  result._22 = cam_up.y;  result._23 = cam_up.z;
-    result._31 = -fwd.x;    result._32 = -fwd.y;    result._33 = -fwd.z;
-
-    result._14 = -dot(right, from);
-    result._24 = -dot(cam_up, from);
-    result._34 =  dot(fwd,   from);
-    result._44 = 1;
-
-    return result;
-}
-
 
 get_frustum_planes :: (vp: Mat4) -> [6] Vec4 {
     row0: Vec4 = .{vp._11, vp._12, vp._13, vp._14};

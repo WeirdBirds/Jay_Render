@@ -16,14 +16,12 @@ Renderer :: struct {
 Render_Target :: struct {
     image: Gpu_Texture_View;
     depth: Gpu_Texture_View;
-    image_buffer: Gpu_Texture;
     depth_buffer: Gpu_Texture;
 }
 
 Queues :: struct {
-    main:     Gpu_Queue;
-    compute:  Gpu_Queue;
-    transfer: Gpu_Queue;
+    main:    Gpu_Queue;
+    compute: Gpu_Queue;
 }
 
 render: Renderer = {};

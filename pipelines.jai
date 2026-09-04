@@ -1,6 +1,6 @@
+#scope_module
+
 create_pipelines :: (data: *Render_Data) {
-    // Recompile pipeline sources at build time so shared Slang ABI changes
-    // cannot leave this pipeline with stale shader cache entries.
     #run {
         compile_pipeline_shader("/shaders/compute/reset.slang");
         compile_pipeline_shader("/shaders/compute/count_cull.slang");
@@ -21,9 +21,8 @@ create_pipelines :: (data: *Render_Data) {
     vs_spv      := get_asset(Shader_Data, "/shaders/vertex/opaque.slang");
     fs_spv      := get_asset(Shader_Data, "/shaders/fragment/opaque.slang");
 
-    #if DEBUG { assert(reset_spv && cull_spv && prefix_spv && scatter_spv && build_spv && hiz_spv && vs_spv && fs_spv, "One of shaders are not loaded"); }
-
-    #if DEBUG log("All shaders compiled.");
+    assert(reset_spv && cull_spv && prefix_spv && scatter_spv && build_spv && hiz_spv && vs_spv && fs_spv,
+        "Jay_Render: shader asset loading failed");
 
     data.pipelines[0] = gpu_create_compute_pipeline(reset_spv.code_words, "Jay_Render reset");
     data.pipelines[1] = gpu_create_compute_pipeline(cull_spv.code_words, "Jay_Render count-cull");
@@ -33,26 +32,35 @@ create_pipelines :: (data: *Render_Data) {
     data.pipelines[6] = gpu_create_compute_pipeline(hiz_spv.code_words, "Jay_Render hiz downsample");
 
     blend: Gpu_Blend_Desc = {};
-
     raster: Gpu_Raster_Desc = .{
         cull = .CCW,
         color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
         depth_format = .D32_SFLOAT,
-        blend_state = *blend
+        blend_state = *blend,
     };
 
     data.pipelines[5] = gpu_create_graphics_pipeline(vs_spv.code_words, fs_spv.code_words, raster, "Jay_Render opaque");
-    #if DEBUG { assert(data.pipelines[5] != 0, "Jay_Render opaque pipeline creation failed"); }
+    assert(data.pipelines[5] != 0, "Jay_Render: opaque pipeline creation failed");
 }
 
+#scope_file
+
+// Pipeline #run owns Slang packaging (no generic slang handler).
+// It compiles each shader and writes its Shader_Data package so runtime
+// get_asset loads owned SPIR-V bytes.
 compile_pipeline_shader :: (asset_path: string) {
     source_path := get_asset_source_path(asset_path);
-    #if DEBUG { assert(source_path.count > 0, "Pipeline shader asset path not found: %", asset_path); }
+    assert(source_path.count > 0, "Jay_Render: shader source not found: %", asset_path);
 
     vfs := make_shader_vfs(get_asset_source);
     defer cleanup_shader_vfs(vfs);
 
-    compiled, spirv := compile_shader(source_path, "", DEBUG, vfs);
+    compiled, spirv := compile_shader(source_path, "", DEBUG, vfs, DEBUG);
     defer if spirv.data free(spirv.data);
-    #if DEBUG { assert(compiled, "Pipeline shader compilation failed: %", source_path); }
+    assert(compiled, "Jay_Render: shader compilation failed: %", source_path);
+
+    name := Name.new(asset_path);
+    out_path := sprint("%/%", Paths.assets_out, sprint("%.jpkg", name.id));
+    pkg := Shader_Data.{ code_words = spirv, reflection = "" };
+    write(out_path, pkg);
 }
