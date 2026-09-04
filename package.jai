@@ -1,4 +1,5 @@
 Jay_Render :: struct {
+
     after: Lifecycle.SimulationComplete;
     before: Lifecycle.RenderComplete;
 
