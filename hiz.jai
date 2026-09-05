@@ -159,7 +159,7 @@ hiz_recreate :: (data: *Render_Data) {
 // Read last frame's counters and log them. The slot the GPU filled three
 // frames ago is complete by pacing, and the entry can never race the reset
 // (the reset is GPU-side, ordered before this frame's adds).
-hiz_frame_begin :: (data: *Render_Data, delta_time: float64) {
+hiz_frame_begin :: (data: *Render_Data, delta_time: float64, do_rescue: bool) {
     hiz := *data.hiz;
     if !hiz.created return;
 
@@ -183,8 +183,14 @@ hiz_frame_begin :: (data: *Render_Data, delta_time: float64) {
             ms := delta_time * 1000.0;
             fps_i: s64 = xx (1000.0 / ms + 0.5);
             ms_fmt := FormatFloat.{ value = ms, trailing_width = 4 };
-            log("Frame %: %ms (%fps), base=% mip=% zero=% rej=% res=% conf=% hist=% drawn=% dc=% vis=% pd=% % % % % % %",
-                cast(s64) data.frames_logged, ms_fmt, fps_i,
+            pre_fmt := FormatFloat.{ value = data.pre_ms, trailing_width = 4 };
+            acq_fmt := FormatFloat.{ value = data.acquire_ms, trailing_width = 4 };
+            sub_fmt := FormatFloat.{ value = data.submit_ms, trailing_width = 4 };
+            wait_fmt := FormatFloat.{ value = acquire_wait_ms, trailing_width = 4 };
+            vk_fmt := FormatFloat.{ value = acquire_vk_ms, trailing_width = 4 };
+            poll_fmt := FormatFloat.{ value = data.poll_ms, trailing_width = 4 };
+            log("Frame %: %ms (%fps) rescue=% pre=%ms acq=%ms(wait=%ms vk=%ms) sub=%ms poll=%ms, base=% mip=% zero=% rej=% res=% conf=% hist=% drawn=% dc=% vis=% pd=% % % % % % %",
+                cast(s64) data.frames_logged, ms_fmt, fps_i, xx do_rescue, pre_fmt, acq_fmt, wait_fmt, vk_fmt, sub_fmt, poll_fmt,
                 counters.base_texels, counters.mip_texels, counters.zero_tiles,
                 counters.rejected, counters.rescued, counters.confirmed, counters.history,
                 counters.per_dispatch[16], dc, tvv,
@@ -200,7 +206,13 @@ hiz_frame_begin :: (data: *Render_Data, delta_time: float64) {
             ms := delta_time * 1000.0;
             fps_i: s64 = xx (1000.0 / ms + 0.5);
             ms_fmt := FormatFloat.{ value = ms, trailing_width = 4 };
-            log("Frame %: %ms (%fps)", cast(s64) data.frames_logged, ms_fmt, fps_i);
+            pre_fmt := FormatFloat.{ value = data.pre_ms, trailing_width = 4 };
+            acq_fmt := FormatFloat.{ value = data.acquire_ms, trailing_width = 4 };
+            sub_fmt := FormatFloat.{ value = data.submit_ms, trailing_width = 4 };
+            wait_fmt := FormatFloat.{ value = acquire_wait_ms, trailing_width = 4 };
+            vk_fmt := FormatFloat.{ value = acquire_vk_ms, trailing_width = 4 };
+            poll_fmt := FormatFloat.{ value = data.poll_ms, trailing_width = 4 };
+            log("Frame %: %ms (%fps) rescue=% pre=%ms acq=%ms(wait=%ms vk=%ms) sub=%ms poll=%ms", cast(s64) data.frames_logged, ms_fmt, fps_i, xx do_rescue, pre_fmt, acq_fmt, wait_fmt, vk_fmt, sub_fmt, poll_fmt);
         }
     }
 }

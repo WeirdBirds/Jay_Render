@@ -10,9 +10,33 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     #if DEBUG { assert(frame_index < MAX_FRAMES_IN_FLIGHT); }
     frame := *data.dynamic[frame_index];
 
+    // Camera-motion gate with hysteresis: turn history ON below the tight
+    // threshold, OFF only past the loose one. Without this, velocity hovering
+    // at the limit flips the gate every other frame (2-submit <-> 4-submit
+    // alternation = visible stutter). Computed before logging so the frame
+    // line can tag whether this frame runs the rescue chain.
+    history_enabled: u32 = 0;
+    if data.occlusion_enabled && data.history_ready && data.hiz.created {
+        px := Vec3.{camera_transform._14, camera_transform._24, camera_transform._34};
+        fwd := normalize(Vec3.{camera_transform._11, camera_transform._21, camera_transform._31});
+        pp := Vec3.{data.prev_transform._14, data.prev_transform._24, data.prev_transform._34};
+        pfwd := normalize(Vec3.{data.prev_transform._11, data.prev_transform._21, data.prev_transform._31});
+        pos_delta := length(px - pp);
+        angle_delta := acos(clamp(dot(fwd, pfwd), -1.0, 1.0));
+        if data.history_active {
+            data.history_active = pos_delta <= HISTORY_OFF_POS_DELTA && angle_delta <= HISTORY_OFF_ANGLE;
+        } else {
+            data.history_active = pos_delta <= HISTORY_MAX_POS_DELTA && angle_delta <= HISTORY_MAX_ANGLE;
+        }
+        history_enabled = xx data.history_active;
+    } else {
+        data.history_active = false;
+    }
+    do_rescue := data.occlusion_enabled && history_enabled != 0 && data.first_frame == 0 && data.history_ready;
+
     // Log the counters for the slot we are about to reuse (3 frames old, GPU
     // done via wait_next_frame). Must read before the reset dispatch zeroes it.
-    hiz_frame_begin(data, delta_time);
+    hiz_frame_begin(data, delta_time, do_rescue);
     data.frames_logged += 1;
 
     // Pools reuse holes. Dispatch through their occupied extent and let the
@@ -47,37 +71,16 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     frame.params.occluded_flags = data.occluded_flags_gpu;
     frame.params.counters = data.hiz.counters_gpu[frame_index];
 
-    // Camera-motion gate with hysteresis: turn history ON below the tight
-    // threshold, OFF only past the loose one. Without this, velocity hovering
-    // at the limit flips the gate every other frame (2-submit <-> 4-submit
-    // alternation = visible stutter).
-    history_enabled: u32 = 0;
-    if data.occlusion_enabled && data.history_ready && data.hiz.created {
-        px := Vec3.{camera_transform._14, camera_transform._24, camera_transform._34};
-        fwd := normalize(Vec3.{camera_transform._11, camera_transform._21, camera_transform._31});
-        pp := Vec3.{data.prev_transform._14, data.prev_transform._24, data.prev_transform._34};
-        pfwd := normalize(Vec3.{data.prev_transform._11, data.prev_transform._21, data.prev_transform._31});
-        pos_delta := length(px - pp);
-        angle_delta := acos(clamp(dot(fwd, pfwd), -1.0, 1.0));
-        if data.history_active {
-            data.history_active = pos_delta <= HISTORY_OFF_POS_DELTA && angle_delta <= HISTORY_OFF_ANGLE;
-        } else {
-            data.history_active = pos_delta <= HISTORY_MAX_POS_DELTA && angle_delta <= HISTORY_MAX_ANGLE;
-        }
-        history_enabled = xx data.history_active;
-    } else {
-        data.history_active = false;
-    }
     frame.params.history_enabled = history_enabled;
 
     for mip: 0..data.hiz.mips - 1 {
         frame.params.hiz_view_indices[mip] = cast(u32) data.hiz.mip_views[mip];
     }
 
-    // Whether this frame needs the rescue pass (history predicted some occlusions).
-    // Skip the 4-dispatch rescue chain when history is off (camera moving) — it would
-    // find zero rejects and waste time. Still signal the pyramid for next frame.
-    do_rescue := data.occlusion_enabled && history_enabled != 0 && data.first_frame == 0 && data.history_ready;
+    // Whether this frame needs the rescue pass is computed above (needed for
+    // the frame log tag). Skip the 4-dispatch rescue chain when history is off
+    // (camera moving) — it would find zero rejects and waste time. Still
+    // signal the pyramid for next frame.
 
     // Pass B (rescue) reads the same frame-level state; its own chain compiles
     // only the pass-A rejects (occluded_flags != 0), retested against the
@@ -153,35 +156,18 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     result, cmd := gpu_start_command_recording(main_queue);
     #if DEBUG { assert(result == .SUCCESS); }
 
-    // Render pass A: the frame's real pass. Clear color and depth.
-    gpu_begin_render_pass(cmd, .{
-        color_targets = .[
-            .{ view = image, load_op = .CLEAR, store_op = .STORE,
-               clear_color._float = .[0.03, 0.03, 0.04, 1.0] }
-        ],
-        depth_target = .{
-            view = depth_view, load_op = .CLEAR, store_op = .STORE,
-            clear_value.depth = 0.0 },
-    });
-
-    opaque_pipeline_result := gpu_set_pipeline(cmd, data.pipelines[5]);
-    #if DEBUG { assert(opaque_pipeline_result == .SUCCESS); }
-
-    gpu_set_viewport(cmd, .{x=0, y=0, width=xx w, height=xx h, min_depth=0, max_depth=1});
-    gpu_set_scissor(cmd, .{x=0, y=0, width=xx w, height=xx h});
-    gpu_set_depth_stencil_state(cmd, .{ depth_test = .GREATER, depth_mode = .READ | .WRITE });
-
     _, index_data_gpu := gpu_heap_head(data.index_allocator);
 
-    draw_result := gpu_draw_indexed_indirect_count(cmd, frame.vertex_params_gpu, data.fragment_params_gpu,
-            index_data_gpu, frame.params.draw_commands,
-            frame.params.draw_count, MAX_DRAWS);
-    #if DEBUG { assert(draw_result == .SUCCESS); }
-
-    gpu_end_render_pass(cmd);
+    // Render pass A: opaque domains clear, translucent domains load.
+    // Pyramid builds from depth between them (translucent never writes it).
+    record_domain_pass(cmd, data, image, depth_view, frame.params, frame.vertex_params_gpu,
+        index_data_gpu, w, h, cast(u32) Material_Domain.OPAQUE, true);
 
     // Pyramid from this frame's depth (reverse-Z min-reduce).
     hiz_build(data, cmd);
+
+    record_domain_pass(cmd, data, image, depth_view, frame.params, frame.vertex_params_gpu,
+        index_data_gpu, w, h, cast(u32) Material_Domain.TRANSLUCENT, false);
 
     // Main-A: render + pyramid. Submit it before recording the rescue chain so
     // the pyramid read by pass B is ordered after the writes on the timeline.
@@ -241,33 +227,17 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
         rescue_done := Gpu_Timeline_Pair.{data.compute_done, data.compute_done_value};
         gpu_submit(compute_b, signals = .[rescue_done], waits = .[pyramid_done]);
 
-        // Main-B: rescue render on LOADED color+depth, then present. The depth
-        // test GREATER keeps rescued fragments behind pass-A content hidden,
-        // and identical depth re-writes are naturally rejected (no z-fight).
+        // Main-B: rescue render on LOADED color+depth, then present.
         result_b2, cmd_b := gpu_start_command_recording(main_queue);
         #if DEBUG { assert(result_b2 == .SUCCESS); }
 
-        gpu_begin_render_pass(cmd_b, .{
-            color_targets = .[
-                .{ view = image, load_op = .LOAD, store_op = .STORE }
-            ],
-            depth_target = .{
-                view = depth_view, load_op = .LOAD, store_op = .STORE },
-        });
-
-        opaque_pipeline_result_b := gpu_set_pipeline(cmd_b, data.pipelines[5]);
-        #if DEBUG { assert(opaque_pipeline_result_b == .SUCCESS); }
-
-        gpu_set_viewport(cmd_b, .{x=0, y=0, width=xx w, height=xx h, min_depth=0, max_depth=1});
-        gpu_set_scissor(cmd_b, .{x=0, y=0, width=xx w, height=xx h});
-        gpu_set_depth_stencil_state(cmd_b, .{ depth_test = .GREATER, depth_mode = .READ | .WRITE });
-
-        draw_result_b := gpu_draw_indexed_indirect_count(cmd_b, frame.vertex_params_b_gpu, data.fragment_params_gpu,
-                index_data_gpu, frame.params_b.draw_commands,
-                frame.params_b.draw_count, MAX_DRAWS);
-        #if DEBUG { assert(draw_result_b == .SUCCESS); }
-
-        gpu_end_render_pass(cmd_b);
+        // Main-B: rescue render on LOADED color+depth, opaque domains first.
+        // Same GREATER depth rule as pass A: rescued fragments behind
+        // pass-A content stay hidden, identical re-writes rejected.
+        record_domain_pass(cmd_b, data, image, depth_view, frame.params_b, frame.vertex_params_b_gpu,
+            index_data_gpu, w, h, cast(u32) Material_Domain.OPAQUE, false);
+        record_domain_pass(cmd_b, data, image, depth_view, frame.params_b, frame.vertex_params_b_gpu,
+            index_data_gpu, w, h, cast(u32) Material_Domain.TRANSLUCENT, false);
 
         gpu_submit_and_present(cmd_b, waits = .[rescue_done]);
     }
@@ -284,3 +254,66 @@ HISTORY_MAX_ANGLE    :: 0.02;    // radians
 HISTORY_OFF_POS_DELTA :: 0.12;   // hysteresis: turn off only past this (prevents
                                  // on/off flapping when velocity hovers at the limit)
 HISTORY_OFF_ANGLE     :: 0.05;
+
+// One indirect draw per alive group in the domain, pipelines bound once
+// each. Commands live at fixed slots (group id, zeroed when empty), so the
+// CPU needs no GPU readback to find them; empty groups draw nothing.
+record_domain_pass :: (
+    cmd: Gpu_Command_Buffer, data: *Render_Data,
+    image: Gpu_Texture_View, depth_view: Gpu_Texture_View,
+    params: *Draw_Params,
+    vertex_params_gpu: Gpu_Ptr,
+    index_data_gpu: Gpu_Ptr, w: u32, h: u32,
+    domain: u32, clear: bool
+) {
+    if data.group_pool.max == 0 return;
+
+    found := false;
+    for g: 0..data.group_pool.max - 1 {
+        if material_registry[data.groups_cpu[g].pipeline].domain == domain { found = true; break; }
+    }
+    if !found return;
+
+    if clear {
+        gpu_begin_render_pass(cmd, .{
+            color_targets = .[
+                .{ view = image, load_op = .CLEAR, store_op = .STORE,
+                   clear_color._float = .[0.03, 0.03, 0.04, 1.0] }
+            ],
+            depth_target = .{
+                view = depth_view, load_op = .CLEAR, store_op = .STORE,
+                clear_value.depth = 0.0 },
+        });
+    } else {
+        gpu_begin_render_pass(cmd, .{
+            color_targets = .[
+                .{ view = image, load_op = .LOAD, store_op = .STORE }
+            ],
+            depth_target = .{
+                view = depth_view, load_op = .LOAD, store_op = .STORE },
+        });
+    }
+
+    gpu_set_viewport(cmd, .{x=0, y=0, width=xx w, height=xx h, min_depth=0, max_depth=1});
+    gpu_set_scissor(cmd, .{x=0, y=0, width=xx w, height=xx h});
+    if domain == cast(u32) Material_Domain.OPAQUE {
+        gpu_set_depth_stencil_state(cmd, .{ depth_test = .GREATER, depth_mode = .READ | .WRITE });
+    } else {
+        gpu_set_depth_stencil_state(cmd, .{ depth_test = .GREATER, depth_mode = .READ });
+    }
+
+    for i: 0..data.material_pipeline_count - 1 {
+        if material_registry[i].domain != domain continue;
+        pipe_result := gpu_set_pipeline(cmd, data.material_pipelines[i]);
+        #if DEBUG { assert(pipe_result == .SUCCESS); }
+        for g: 0..data.group_pool.max - 1 {
+            if data.groups_cpu[g].pipeline != cast(u32) i continue;
+            args := params.draw_commands + cast(Gpu_Ptr)(xx g * size_of(Draw_Indexed_Command));
+            draw_result := gpu_draw_indexed_indirect(cmd, vertex_params_gpu, data.fragment_params_gpu,
+                index_data_gpu, args);
+            #if DEBUG { assert(draw_result == .SUCCESS); }
+        }
+    }
+
+    gpu_end_render_pass(cmd);
+}

@@ -1,9 +1,10 @@
-new_draw_group :: (data: *Render_Data, mesh_id: u32) -> u32 {
+new_draw_group :: (data: *Render_Data, mesh_id: u32, pipeline: u32) -> u32 {
     assert(data.group_pool.thumbstones.count > 0 || data.group_pool.max < MAX_GROUPS,
         "Jay_Render: MAX_GROUPS reached");
+    assert(pipeline < MAX_MATERIALS, "Jay_Render: invalid material pipeline");
 
     group_id := get_index(*data.group_pool);
-    data.groups_cpu[group_id] = .{mesh_id = mesh_id};
+    data.groups_cpu[group_id] = .{mesh_id = mesh_id, pipeline = pipeline};
     #if DEBUG { assert(group_id < MAX_GROUPS); }
     return group_id;
 }
@@ -58,11 +59,12 @@ Draw_Params :: struct {
     draw_count:         Gpu_Ptr;
 }
 
-// Material is intentionally absent. Material selection is per instance, so
-// grouping only by mesh avoids redundant indirect commands for same mesh.
+// pipeline is the material registry index: one indirect draw group per
+// (mesh, pipeline) pair. Same 16-byte stride; the shader mirror keeps
+// padding in this slot because shaders only read mesh_id.
 Draw_Group :: struct {
     mesh_id:  u32;
-    padding0: u32;
+    pipeline: u32;
     padding1: u32;
     padding2: u32;
 }

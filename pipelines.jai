@@ -18,10 +18,8 @@ create_pipelines :: (data: *Render_Data) {
     scatter_spv := get_asset(Shader_Data, "/shaders/compute/scatter.slang");
     build_spv   := get_asset(Shader_Data, "/shaders/compute/build_draws.slang");
     hiz_spv     := get_asset(Shader_Data, "/shaders/compute/hiz_downsample.slang");
-    vs_spv      := get_asset(Shader_Data, "/shaders/vertex/opaque.slang");
-    fs_spv      := get_asset(Shader_Data, "/shaders/fragment/opaque.slang");
 
-    assert(reset_spv && cull_spv && prefix_spv && scatter_spv && build_spv && hiz_spv && vs_spv && fs_spv,
+    assert(reset_spv && cull_spv && prefix_spv && scatter_spv && build_spv && hiz_spv,
         "Jay_Render: shader asset loading failed");
 
     data.pipelines[0] = gpu_create_compute_pipeline(reset_spv.code_words, "Jay_Render reset");
@@ -31,23 +29,49 @@ create_pipelines :: (data: *Render_Data) {
     data.pipelines[4] = gpu_create_compute_pipeline(build_spv.code_words, "Jay_Render build draws");
     data.pipelines[6] = gpu_create_compute_pipeline(hiz_spv.code_words, "Jay_Render hiz downsample");
 
-    blend: Gpu_Blend_Desc = {};
-    raster: Gpu_Raster_Desc = .{
-        cull = .CCW,
-        color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
-        depth_format = .D32_SFLOAT,
-        blend_state = *blend,
-    };
+    // One graphics pipeline per registered material. Raster state follows
+    // the domain: opaque writes depth with no blending, translucent blends
+    // over it with depth read-only. Packages were written at compile time
+    // by Material #insert, so runtime only loads and creates.
+    assert(material_registry_count > 0 && material_registry_count <= MAX_MATERIALS,
+        "Jay_Render: no materials registered");
+    data.material_pipeline_count = material_registry_count;
+    for i: 0..material_registry_count - 1 {
+        entry := material_registry[i];
+        vs_spv := get_asset(Shader_Data, Name.{ id = entry.vertex_id });
+        fs_spv := get_asset(Shader_Data, Name.{ id = entry.fragment_id });
+        assert(vs_spv && fs_spv, "Jay_Render: material shader asset loading failed");
 
-    data.pipelines[5] = gpu_create_graphics_pipeline(vs_spv.code_words, fs_spv.code_words, raster, "Jay_Render opaque");
-    assert(data.pipelines[5] != 0, "Jay_Render: opaque pipeline creation failed");
+        if entry.domain == cast(u32) Material_Domain.OPAQUE {
+            blend: Gpu_Blend_Desc = {};
+            raster: Gpu_Raster_Desc = .{
+                cull = .CCW,
+                color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
+                depth_format = .D32_SFLOAT,
+                blend_state = *blend,
+            };
+            data.material_pipelines[i] = gpu_create_graphics_pipeline(vs_spv.code_words, fs_spv.code_words, raster, tprint("Jay_Render material % opaque", i));
+        } else {
+            blend: Gpu_Blend_Desc = .{
+                src_color_factor = .SRC_ALPHA, dst_color_factor = .ONE_MINUS_SRC_ALPHA,
+                src_alpha_factor = .ONE, dst_alpha_factor = .ONE_MINUS_SRC_ALPHA,
+            };
+            raster: Gpu_Raster_Desc = .{
+                cull = .CCW,
+                color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
+                depth_format = .D32_SFLOAT,
+                blend_state = *blend,
+            };
+            data.material_pipelines[i] = gpu_create_graphics_pipeline(vs_spv.code_words, fs_spv.code_words, raster, tprint("Jay_Render material % translucent", i));
+        }
+        assert(data.material_pipelines[i] != 0, "Jay_Render: material pipeline creation failed");
+    }
 }
-
-#scope_file
 
 // Pipeline #run owns Slang packaging (no generic slang handler).
 // It compiles each shader and writes its Shader_Data package so runtime
-// get_asset loads owned SPIR-V bytes.
+// get_asset loads owned SPIR-V bytes. Shared with Material #insert, which
+// packages exactly the shaders materials use.
 compile_pipeline_shader :: (asset_path: string) {
     source_path := get_asset_source_path(asset_path);
     assert(source_path.count > 0, "Jay_Render: shader source not found: %", asset_path);

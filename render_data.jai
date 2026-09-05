@@ -33,8 +33,22 @@ Render_Data :: struct {
     first_frame:        u32 = 1;
     prev_transform:     Mat4;
 
+    // Diagnostic splits for the last completed frame (set by after_tick,
+    // read by the next frame log). pre_ms covers extent query + camera
+    // setup; acquire_ms covers swapchain acquire (incl. wait_next_frame);
+    // submit_ms covers cull/render/submit/present.
+    pre_ms:     float64;
+    acquire_ms: float64;
+    submit_ms:  float64;
+    poll_ms:    float64;
+
     hiz: HiZ_Data;
     pipelines: [7]Gpu_Pipeline;
+
+    // One graphics pipeline per material registry entry (unified array).
+    // groups_cpu[g].pipeline indexes this array.
+    material_pipelines: [MAX_MATERIALS]Gpu_Pipeline;
+    material_pipeline_count: s64;
 
     frames_logged: u64;       // monotonic frame counter for the log line
 
@@ -186,6 +200,9 @@ render_init :: () -> Render_Data {
 render_data_destroy :: (data: *Render_Data) {
     for *pipeline: data.pipelines {
         if pipeline.* != 0 gpu_free_pipeline(pipeline.*);
+    }
+    for i: 0..data.material_pipeline_count - 1 {
+        if data.material_pipelines[i] != 0 gpu_free_pipeline(data.material_pipelines[i]);
     }
 
     hiz_destroy(data);

@@ -14,9 +14,19 @@ Jay_Render :: struct {
         }
         render.gpu_initialized = true;
 
+        present_text := SDL_getenv("JAY_PRESENT");
+        present_preferred: [..] Present_Mode;
+        if present_text != null && present_text[0] != 0 {
+            if present_text[0] == 105 {      // 'i' = immediate
+                array_add(*present_preferred, .IMMEDIATE);
+            } else if present_text[0] == 109 { // 'm' = mailbox
+                array_add(*present_preferred, .MAILBOX);
+            } else if present_text[0] == 102 { // 'f' = fifo
+                array_add(*present_preferred, .FIFO);
+            }
+        }
+
         #if OS == .LINUX {
-            // RenderDoc upstream still requires XWayland. Ordinary Linux runs
-            // retain native Wayland when compositor support is available.
             if DEBUG || RENDER_CAPTURE || SDL_getenv("WAYLAND_DISPLAY") == null {
                 SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11");
                 render.window_type = .X11;
@@ -60,28 +70,28 @@ Jay_Render :: struct {
                 renderer_start_failed(engine, "invalid Wayland handles");
                 return;
             }
-            gpu_init_swapchain(display, surface, render.window_type);
+            gpu_init_swapchain(display, surface, render.window_type, present_preferred);
         } else if render.window_type == .X11 {
             window_handle := cast(u64) SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
             if window_handle == 0 {
                 renderer_start_failed(engine, "invalid X11 window handle");
                 return;
             }
-            gpu_init_swapchain(window_handle, render.window_type, .[]);
+            gpu_init_swapchain(window_handle, render.window_type, present_preferred);
         } else if render.window_type == .WIN32 {
             window_handle := SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, null);
             if window_handle == null {
                 renderer_start_failed(engine, "invalid Win32 window handle");
                 return;
             }
-            gpu_init_swapchain(cast(u64) window_handle, render.window_type, .[]);
+            gpu_init_swapchain(cast(u64) window_handle, render.window_type, present_preferred);
         } else {
             cocoa_window := SDL_GetPointerProperty(props, SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null);
             if cocoa_window == null {
                 renderer_start_failed(engine, "invalid Cocoa window handle");
                 return;
             }
-            gpu_init_swapchain(cast(u64) cocoa_window, render.window_type, .[]);
+            gpu_init_swapchain(cast(u64) cocoa_window, render.window_type, present_preferred);
         }
         render.swapchain_initialized = true;
 
@@ -93,12 +103,12 @@ Jay_Render :: struct {
         }
 
         render.data = render_init();
-        // JAY_OCCLUSION=0 forces the stage-1 path (frustum only, no rescue
-        // pass).
+
         cached := SDL_getenv("JAY_OCCLUSION");
         if cached != null && cached[0] == 48 {  // 48 = '0'
             render.data.occlusion_enabled = false;
         }
+
         render.data_initialized = true;
         create_pipelines(*render.data);
         create_depth_buffer();
@@ -110,6 +120,7 @@ Jay_Render :: struct {
     before_tick :: (engine: *Engine) {
         if !render.sdl_initialized return;
 
+        t_poll := current_time_monotonic();
         ev: SDL_Event;
         while SDL_PollEvent(*ev) {
             if ev.type == {
@@ -123,11 +134,13 @@ Jay_Render :: struct {
                 case;
             }
         }
+        render.data.poll_ms = to_float64_seconds(current_time_monotonic() - t_poll) * 1000.0;
     }
 
     after_tick :: (engine: *Engine) {
         if !render.data_initialized || !render.sdl_window return;
 
+        t_frame := current_time_monotonic();
         w, h: s32;
         if !SDL_GetWindowSizeInPixels(render.sdl_window, *w, *h) return;
         if w <= 0 || h <= 0 return;
@@ -142,7 +155,11 @@ Jay_Render :: struct {
             render.framebuffer_resized = false;
         }
 
+        t_acquire := current_time_monotonic();
+        render.data.pre_ms = to_float64_seconds(t_acquire - t_frame) * 1000.0;
         acquire_result, swapchain_image := gpu_swapchain_acquire();
+        t_submit := current_time_monotonic();
+        render.data.acquire_ms = to_float64_seconds(t_submit - t_acquire) * 1000.0;
         if acquire_result == .ERROR_SWAPCHAIN_OUT_OF_DATE {
             render.framebuffer_resized = true;
             return;
@@ -167,6 +184,8 @@ Jay_Render :: struct {
         });
 
         camera_capture(camera, transform, engine.timer.delta_time);
+        t_end := current_time_monotonic();
+        render.data.submit_ms = to_float64_seconds(t_end - t_submit) * 1000.0;
         render.frames_rendered += 1;
     }
 

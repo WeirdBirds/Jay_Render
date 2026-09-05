@@ -1,18 +1,17 @@
 #module_parameters(
-    // Renderer-wide debug and capture switches.
+    
     DEBUG := false,
     RENDER_CAPTURE := false,
-    // Resource limits. These are compile-time contract values so all users
-    // of Jay_Render see the same pool and buffer sizes.
+
     MAX_INSTANCES := 262144,
     MAX_MESHES := 65536,
     MAX_GROUPS := 65536,
     MAX_DRAWS := 65536,
+    MAX_MATERIALS := 1024,
 
-    // CPU-visible renderer heap policy and budgets.
     GPU_HEAP_ALIGNMENT := 8,
-    VERTEX_HEAP_BUDGET := 512 * 1024 * 1024,
-    INDEX_HEAP_BUDGET := 128 * 1024 * 1024,
+    VERTEX_HEAP_BUDGET := 512 * 1024,
+    INDEX_HEAP_BUDGET := 128 * 1024,
     GPU_HEAP_GROWTH_FACTOR := 1.5
 );
 

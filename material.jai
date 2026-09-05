@@ -1,103 +1,82 @@
-Material :: struct(vertex: string, fragment: string) {
+Material_Domain :: enum u32 {
+    OPAQUE      :: 0;
+    TRANSLUCENT :: 1;
+}
+Material_Entry :: struct {
+    vertex_id:   u64;
+    fragment_id: u64;
+    domain:      u32;
+}
+
+#no_reset material_registry: [MAX_MATERIALS] Material_Entry;
+#no_reset material_registry_count: s64;
+
+Material :: struct(vertex: string, fragment: string, domain: Material_Domain = .OPAQUE) {
     #insert -> string {
         vertex_path := get_asset_source_path(vertex);
         fragment_path := get_asset_source_path(fragment);
         assert(vertex_path.count > 0 && fragment_path.count > 0, "Material: shader asset path not found");
 
+        // Compile, validate, and package both stages. Packaging here (not in
+        // a generic handler) guarantees the runtime Shader_Data packages
+        // exist for exactly the shaders materials use. Reflection runs after
+        // successful compilation: it alone may accept a module that fails
+        // entry-point linking.
+        compile_pipeline_shader(vertex);
+        compile_pipeline_shader(fragment);
+
         vfs := make_shader_vfs(get_asset_source);
         defer cleanup_shader_vfs(vfs);
-
-        // Reflection alone may accept a module that fails entry-point linking.
-        // Compile both stages in this metaprogram pass before using reflection.
-        vertex_ok, vertex_spirv := compile_shader(vertex_path, "", DEBUG, vfs, DEBUG);
-        defer if vertex_spirv.data free(vertex_spirv.data);
-        assert(vertex_ok, "Material: vertex Slang compilation failed for %", vertex_path);
-
-        fragment_ok, fragment_spirv := compile_shader(fragment_path, "", DEBUG, vfs, DEBUG);
-        defer if fragment_spirv.data free(fragment_spirv.data);
-        assert(fragment_ok, "Material: fragment Slang compilation failed for %", fragment_path);
 
         vertex_decls := get_shader_declarations(vertex_path, vfs);
         defer free_shader_declarations(*vertex_decls);
         fragment_decls := get_shader_declarations(fragment_path, vfs);
         defer free_shader_declarations(*fragment_decls);
 
+        // Register the (vertex, fragment, domain) triple. Same triple from
+        // any module reuses one index; the runtime builds one pipeline each.
+        v_id := Name.new(vertex).id;
+        f_id := Name.new(fragment).id;
+        domain_rank := cast(u32) domain;
+        material_index: s64 = -1;
+        for i: 0..material_registry_count - 1 {
+            entry := material_registry[i];
+            if entry.vertex_id == v_id && entry.fragment_id == f_id {
+                assert(entry.domain == domain_rank, "Material: same shaders with different domains (%)", vertex);
+                material_index = i;
+                break;
+            }
+        }
+        if material_index < 0 {
+            assert(material_registry_count < MAX_MATERIALS, "Material: registry full");
+            material_registry[material_registry_count] = .{ vertex_id = v_id, fragment_id = f_id, domain = domain_rank };
+            material_index = material_registry_count;
+            material_registry_count += 1;
+        }
+
         builder: String_Builder;
-        schema: String_Builder;
 
         total_size: u64 = 0;
 
-        // ---- vertex stage (V1: no material fields allowed) ----
-        print_to_builder(*builder, "vertex: struct {};\n");
-        for vertex_decls.decls {
-            kind := jay_material_decl_kind(it);
-            if kind == .PARAMS {
-                assert(false, "Material: vertex Jay::Params not supported in V1 (shader %, field %)", vertex_path, it.name);
-            } else if kind == .TEXTURE_2D {
-                assert(false, "Material: vertex Jay::Texture2D not supported in V1 (shader %, field %)", vertex_path, it.name);
-            } else if kind == .SAMPLER {
-                assert(false, "Material: vertex Jay::Sampler not supported in V1 (shader %, field %)", vertex_path, it.name);
-            }
-        }
+        // ---- vertex stage (Params only in V1; may be empty) ----
+        vertex_seen: [..] string;
+        vertex_seen.allocator = temp;
+        vertex_size := build_stage(vertex_decls, *builder, vertex_seen, vertex_path, "vertex");
 
         // ---- fragment stage ----
-        print_to_builder(*builder, "fragment: struct {\n");
 
         fragment_seen: [..] string;
         fragment_seen.allocator = temp;
-        fragment_field_count := 0;
 
-        for fragment_decls.decls {
-            kind := jay_material_decl_kind(it);
-            if kind == .UNSUPPORTED then continue;
-            if kind == .TEXTURE_2D {
-                assert(false, "Material: Jay::Texture2D not supported in V1 (shader %, field %). Use Jay::Params scalar/vector only.", fragment_path, it.name);
-            }
-            if kind == .SAMPLER {
-                assert(false, "Material: Jay::Sampler not supported in V1 (shader %, field %)", fragment_path, it.name);
-            }
-            if kind != .PARAMS then continue;
+        fragment_size := build_stage(fragment_decls, *builder, fragment_seen, fragment_path, "fragment");
+        total_size = fragment_size + vertex_size;
 
-            for fragment_seen {
-                assert(it != fragment_seen[it_index], "Material: duplicate material field in %", fragment_path);
-            }
-            array_add(*fragment_seen, it.name);
+        print_to_builder(*builder, "VERTEX_SIZE :: %;\n", vertex_size);
+        print_to_builder(*builder, "FRAGMENT_SIZE :: %;\n", fragment_size);
 
-            params_type := it.type.generic_arg;
-            assert(params_type != null, "Material: Jay::Params missing generic arg (shader %, field %)", fragment_path, it.name);
-            assert(params_type.fields.count > 0, "Material: Jay::Params struct has no fields (shader %, field %)", fragment_path, it.name);
-
-            print_to_builder(*builder, "    %: struct {\n", it.name);
-            print_to_builder(*schema, "fragment:%:%:", it.name, params_type.name);
-
-            for params_type.fields {
-                jai_name := jay_material_jai_name(it.type);
-                assert(jai_name.count > 0, "Material: unsupported field type % (shader %)", it.type.name, fragment_path);
-                print_to_builder(*builder, "        %: %;\n", it.name, jai_name);
-                print_to_builder(*schema, "%:%;", it.name, jai_name);
-                field_size := jay_material_gpu_type_size(it.type);
-                assert(field_size > 0, "Material: zero-size field % (shader %)", it.name, fragment_path);
-                total_size += field_size;
-            }
-
-            print_to_builder(*builder, "    };\n");
-            fragment_field_count += 1;
-        }
-
-        print_to_builder(*builder, "};\n");
-
-        assert(fragment_field_count > 0, "Material: fragment shader has no Jay::Params material fields (%)", fragment_path);
-
-        schema_str := builder_to_string(*schema);
-        defer free(schema_str.data);
-        hash: u64 = 14695981039346656037;
-        for 0..schema_str.count-1 {
-            hash ^= xx schema_str.data[it];
-            hash *= 1099511628211;
-        }
-
-        print_to_builder(*builder, "LAYOUT_HASH :: cast(u64) %;\n", hash);
         print_to_builder(*builder, "CONSTANTS_SIZE :: %;\n", total_size);
+        print_to_builder(*builder, "MATERIAL_INDEX :: %;\n", material_index);
+        print_to_builder(*builder, "DOMAIN :: %;\n", domain_rank);
 
         return builder_to_string(*builder);
     }
@@ -108,16 +87,32 @@ Material :: struct(vertex: string, fragment: string) {
 // The recipe value has call-site lifetime only and may be discarded after return.
 upload_material :: (data: *Render_Data, recipe: *$M) -> Material_Id {
     size := xx M.CONSTANTS_SIZE;
-    assert(size > 0 && size <= 65536, "upload_material: invalid CONSTANTS_SIZE");
+    frag_size := xx M.FRAGMENT_SIZE;
+    vert_size := xx M.VERTEX_SIZE;
+    assert(size <= 65536, "upload_material: invalid CONSTANTS_SIZE");
+    assert(size == frag_size + vert_size, "upload_material: size mismatch");
+
+    // Empty material: no bytes, no allocation. All empty recipes share id 0;
+    // shaders without material fields never dereference it.
+    if size == 0 return cast(Material_Id) 0;
 
     frag_ptr := cast(*u8) *recipe.fragment;
+    vert_ptr := cast(*u8) *recipe.vertex;
 
     hash: u64 = 14695981039346656037;
-    for i: 0..size-1 {
-        hash ^= xx (frag_ptr + i).*;
-        hash *= 1099511628211;
+    if frag_size > 0 {
+        for i: 0..frag_size-1 {
+            hash ^= xx (frag_ptr + i).*;
+            hash *= 1099511628211;
+        }
     }
-    hash ^= M.LAYOUT_HASH;
+    if vert_size > 0 {
+        for i: 0..vert_size-1 {
+            hash ^= xx (vert_ptr + i).*;
+            hash *= 1099511628211;
+        }
+    }
+    hash ^= cast(u64) type_info(M);
     hash *= 1099511628211;
 
     found := table_find_pointer(*data.material_cache, hash);
@@ -128,7 +123,8 @@ upload_material :: (data: *Render_Data, recipe: *$M) -> Material_Id {
 
     cpu, gpu := gpu_malloc(size);
     assert(cpu != null && gpu != 0, "upload_material: GPU allocation failed");
-    memcpy(cpu, frag_ptr, size);
+    if frag_size > 0 memcpy(cpu, frag_ptr, frag_size);
+    if vert_size > 0 memcpy(cast(*u8) cpu + frag_size, vert_ptr, vert_size);
 
     id := cast(Material_Id) gpu;
     table_add(*data.material_cache, hash, Uploaded_Material.{ id = id, item_hash = hash, ref_count = 1, allocation = cpu, gpu = gpu, size = size });
@@ -159,8 +155,53 @@ release_material :: (data: *Render_Data, id: Material_Id) {
 
 #scope_file
 
-// Jay-specific material reflection (kept out of third-party SGPU).
-// SGPU provides general Reflection_Type + slang_scalar_byte_size only.
+// GPU blob layout: fragment bytes first (offset 0, preserves current shader
+// behavior), vertex bytes appended after. Emptiness is legal for vertex only;
+// the fragment caller asserts non-empty.
+build_stage :: (reflection: Shader_Reflection, builder: *String_Builder, seen: [..]string, path: string, stage: string) -> u64  {
+    print_to_builder(builder, "%: struct {\n", stage);
+
+    total_size : u64 = 0;
+
+    for reflection.decls {
+        kind := jay_material_decl_kind(it);
+        if kind == .UNSUPPORTED then continue;
+        if kind == .TEXTURE_2D {
+            assert(false, "Material: Jay::Texture2D not supported in V1 (shader %, field %). Use Jay::Params scalar/vector only.", path, it.name);
+        }
+        if kind == .SAMPLER {
+            assert(false, "Material: Jay::Sampler not supported in V1 (shader %, field %)", path, it.name);
+        }
+        if kind != .PARAMS then continue;
+
+        for seen {
+            assert(it != seen[it_index], "Material: duplicate material field in %", path);
+        }
+
+        array_add(*seen, it.name);
+
+        params_type := it.type.generic_arg;
+        assert(params_type != null, "Material: Jay::Params missing generic arg (shader %, field %)", path, it.name);
+        assert(params_type.fields.count > 0, "Material: Jay::Params struct has no fields (shader %, field %)", path, it.name);
+
+        print_to_builder(builder, "    %: struct {\n", it.name);
+
+        for params_type.fields {
+            jai_name := jay_material_jai_name(it.type);
+            assert(jai_name.count > 0, "Material: unsupported field type % (shader %)", it.type.name, path);
+            print_to_builder(builder, "        %: %;\n", it.name, jai_name);
+            field_size := jay_material_gpu_type_size(it.type);
+            assert(field_size > 0, "Material: zero-size field % (shader %)", it.name, path);
+            total_size += field_size;
+        }
+
+            print_to_builder(builder, "    };\n");
+    }
+
+    print_to_builder(builder, "};\n");
+
+    return total_size;
+}
 
 Jay_Material_Kind :: enum {
     UNSUPPORTED;
