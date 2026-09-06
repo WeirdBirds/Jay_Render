@@ -278,7 +278,7 @@ record_domain_pass :: (
         gpu_begin_render_pass(cmd, .{
             color_targets = .[
                 .{ view = image, load_op = .CLEAR, store_op = .STORE,
-                   clear_color._float = .[0.03, 0.03, 0.04, 1.0] }
+                   clear_color._float = .[0.75, 0.75, 0.78, 1.0] }
             ],
             depth_target = .{
                 view = depth_view, load_op = .CLEAR, store_op = .STORE,

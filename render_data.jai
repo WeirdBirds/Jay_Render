@@ -16,6 +16,8 @@ Render_Data :: struct {
     vertex_allocator:   Allocator;
     index_allocator:    Allocator;
     material_cache: Table(u64, Uploaded_Material);
+    texture_cache:  Table(u64, Uploaded_Texture);
+    default_sampler: Gpu_Sampler;
 
     dynamic: [MAX_FRAMES_IN_FLIGHT]Frame_Params;
 
@@ -132,6 +134,10 @@ render_init :: () -> Render_Data {
     result.vertex_allocator = Gpu_Heap(VERTEX_HEAP_BUDGET, max(size_of(Vertex), GPU_HEAP_ALIGNMENT));
     result.index_allocator = Gpu_Heap(INDEX_HEAP_BUDGET, max(size_of(u32), GPU_HEAP_ALIGNMENT));
 
+    // Stock sampler for material SamplerState parameters (linear repeat).
+    result.default_sampler = gpu_create_sampler(.{ });
+    assert(result.default_sampler != 0, "Jay_Render: default sampler creation failed");
+
     // Shared persistent data.
     gpu_array_init(*result.transforms_cpu, *result.transforms_gpu, MAX_INSTANCES);
     gpu_array_init(*result.instances_cpu, *result.instances_gpu, MAX_INSTANCES);
@@ -223,6 +229,12 @@ render_data_destroy :: (data: *Render_Data) {
         if it.allocation != null gpu_free(it.allocation);
     }
     deinit(*data.material_cache);
+
+    for data.texture_cache {
+        if it.texture != 0 gpu_free(it.texture);
+    }
+    deinit(*data.texture_cache);
+    if data.default_sampler != 0 gpu_free(data.default_sampler);
 
     gpu_heap_destroy(*data.vertex_allocator);
     gpu_heap_destroy(*data.index_allocator);

@@ -83,15 +83,19 @@ never moves.
 ## Compile-time materials
 
 `Opaque_Material :: Material(vertex = ..., fragment = ...)` generates its
-recipe struct from Slang reflection. The fragment shader declares
-`Jay::Params<Opaque_Params> opaque`; the generated Jai recipe mirrors it as
-`recipe.fragment.opaque.base_color`. No hand-written host mirror exists.
+recipe struct from ordinary Slang `main` function parameters. A fragment
+function may accept one struct parameter, `Texture2D` parameters, and
+`SamplerState` parameters. The generated Jai recipe mirrors struct fields and
+uses texture asset names for texture parameters. No hand-written host mirror
+exists.
 
-`upload_material` packs the reflected fragment blob, deduplicates identical
-recipes by hash, and returns a direct GPU pointer (`Material_Id`). Each
-`Mesh_Instance` stores that pointer; the fragment shader loads
-`opaque.get((Opaque_Params*)instance.material)`. Draw groups contain only mesh
-identity, so same-mesh material variants share one indirect draw group.
+Jay_Render generates private `_jay_main` entry point code. It loads one
+instance material blob, resolves bindless resource slots, then calls authored
+`main` with normal Slang values. `upload_material` packs that blob,
+deduplicates identical recipes by hash, and returns a direct GPU pointer
+(`Material_Id`). Each `Mesh_Instance` stores that pointer. Draw groups contain
+only mesh identity, so same-mesh material variants share one indirect draw
+group.
 
 Pipeline `#run` owns Slang packaging (no generic slang handler): it compiles
 each shader and writes its `Shader_Data` package, so runtime `get_asset` loads

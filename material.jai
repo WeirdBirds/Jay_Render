@@ -11,38 +11,30 @@ Material_Entry :: struct {
 #no_reset material_registry: [MAX_MATERIALS] Material_Entry;
 #no_reset material_registry_count: s64;
 
-Material :: struct(vertex: string, fragment: string, domain: Material_Domain = .OPAQUE) {
+Material :: struct(vs_name: string, fs_name: string, domain: Material_Domain = .OPAQUE) {
     #insert -> string {
-        vertex_path := get_asset_source_path(vertex);
-        fragment_path := get_asset_source_path(fragment);
+        vertex_path := get_asset_source_path(vs_name);
+        fragment_path := get_asset_source_path(fs_name);
         assert(vertex_path.count > 0 && fragment_path.count > 0, "Material: shader asset path not found");
 
-        // Compile, validate, and package both stages. Packaging here (not in
-        // a generic handler) guarantees the runtime Shader_Data packages
-        // exist for exactly the shaders materials use. Reflection runs after
-        // successful compilation: it alone may accept a module that fails
-        // entry-point linking.
-        compile_pipeline_shader(vertex);
-        compile_pipeline_shader(fragment);
-
+        compile_pipeline_shader(vs_name);
         vfs := make_shader_vfs(get_asset_source);
         defer cleanup_shader_vfs(vfs);
-
-        vertex_decls := get_shader_declarations(vertex_path, vfs);
-        defer free_shader_declarations(*vertex_decls);
+        vertex_decls: Shader_Reflection;
         fragment_decls := get_shader_declarations(fragment_path, vfs);
         defer free_shader_declarations(*fragment_decls);
+        compile_material_pipeline_shader(fs_name, fragment_decls);
 
         // Register the (vertex, fragment, domain) triple. Same triple from
         // any module reuses one index; the runtime builds one pipeline each.
-        v_id := Name.new(vertex).id;
-        f_id := Name.new(fragment).id;
+        v_id := Name.new(vs_name).id;
+        f_id := Name.new(fs_name).id;
         domain_rank := cast(u32) domain;
         material_index: s64 = -1;
         for i: 0..material_registry_count - 1 {
             entry := material_registry[i];
             if entry.vertex_id == v_id && entry.fragment_id == f_id {
-                assert(entry.domain == domain_rank, "Material: same shaders with different domains (%)", vertex);
+                assert(entry.domain == domain_rank, "Material: same shaders with different domains (%)", vs_name);
                 material_index = i;
                 break;
             }
@@ -58,17 +50,17 @@ Material :: struct(vertex: string, fragment: string, domain: Material_Domain = .
 
         total_size: u64 = 0;
 
-        // ---- vertex stage (Params only in V1; may be empty) ----
+        // ---- vertex + fragment stages (Params, Texture2D, Sampler) ----
+        pack: String_Builder;
+
         vertex_seen: [..] string;
         vertex_seen.allocator = temp;
-        vertex_size := build_stage(vertex_decls, *builder, vertex_seen, vertex_path, "vertex");
-
-        // ---- fragment stage ----
+        vertex_size := build_stage(vertex_decls, *builder, *pack, vertex_seen, vertex_path, "vertex", "vert", 0);
 
         fragment_seen: [..] string;
         fragment_seen.allocator = temp;
 
-        fragment_size := build_stage(fragment_decls, *builder, fragment_seen, fragment_path, "fragment");
+        fragment_size := build_stage(fragment_decls, *builder, *pack, fragment_seen, fragment_path, "fragment", "frag", xx vertex_size);
         total_size = fragment_size + vertex_size;
 
         print_to_builder(*builder, "VERTEX_SIZE :: %;\n", vertex_size);
@@ -77,6 +69,11 @@ Material :: struct(vertex: string, fragment: string, domain: Material_Domain = .
         print_to_builder(*builder, "CONSTANTS_SIZE :: %;\n", total_size);
         print_to_builder(*builder, "MATERIAL_INDEX :: %;\n", material_index);
         print_to_builder(*builder, "DOMAIN :: %;\n", domain_rank);
+        print_to_builder(*builder, "pack_material :: (data: *Render_Data, frag: *$F, vert: *$V, dst: *u8) {\n");
+        pack_str := builder_to_string(*pack);
+        defer free(pack_str.data);
+        print_to_builder(*builder, "%", pack_str);
+        print_to_builder(*builder, "}\n");
 
         return builder_to_string(*builder);
     }
@@ -96,21 +93,17 @@ upload_material :: (data: *Render_Data, recipe: *$M) -> Material_Id {
     // shaders without material fields never dereference it.
     if size == 0 return cast(Material_Id) 0;
 
-    frag_ptr := cast(*u8) *recipe.fragment;
-    vert_ptr := cast(*u8) *recipe.vertex;
+    cpu, gpu := gpu_malloc(size);
+    assert(cpu != null && gpu != 0, "upload_material: GPU allocation failed");
+    M.pack_material(data, *recipe.fragment, *recipe.vertex, cpu);
 
+    // Hash the packed bytes: recipes hold paths and padding, the blob is
+    // canonical. Allocating before dedup wastes one alloc on hits only.
     hash: u64 = 14695981039346656037;
-    if frag_size > 0 {
-        for i: 0..frag_size-1 {
-            hash ^= xx (frag_ptr + i).*;
-            hash *= 1099511628211;
-        }
-    }
-    if vert_size > 0 {
-        for i: 0..vert_size-1 {
-            hash ^= xx (vert_ptr + i).*;
-            hash *= 1099511628211;
-        }
+    packed := cast(*u8) cpu;
+    for i: 0..size-1 {
+        hash ^= xx (packed + i).*;
+        hash *= 1099511628211;
     }
     hash ^= cast(u64) type_info(M);
     hash *= 1099511628211;
@@ -118,13 +111,9 @@ upload_material :: (data: *Render_Data, recipe: *$M) -> Material_Id {
     found := table_find_pointer(*data.material_cache, hash);
     if found {
         found.ref_count += 1;
+        gpu_free(cpu);
         return found.id;
     }
-
-    cpu, gpu := gpu_malloc(size);
-    assert(cpu != null && gpu != 0, "upload_material: GPU allocation failed");
-    if frag_size > 0 memcpy(cpu, frag_ptr, frag_size);
-    if vert_size > 0 memcpy(cast(*u8) cpu + frag_size, vert_ptr, vert_size);
 
     id := cast(Material_Id) gpu;
     table_add(*data.material_cache, hash, Uploaded_Material.{ id = id, item_hash = hash, ref_count = 1, allocation = cpu, gpu = gpu, size = size });
@@ -153,54 +142,131 @@ release_material :: (data: *Render_Data, id: Material_Id) {
     }
 }
 
+// SamplerState parameters resolve to the stock sampler.
+default_sampler_index :: (data: *Render_Data) -> u32 {
+    assert(data.default_sampler != 0, "material: default sampler missing");
+    return cast(u32) data.default_sampler;
+}
+
+// Resolve a texture asset to a bindless view index, uploading once.
+// The Name comes from Name.static at the recipe site, so the png handler
+// prepared its package at compile time and get_asset serves it here.
+// Runs at scene-build time; the copy targets a fresh texture nothing
+// else touches, so no sync needed.
+resolve_texture_index :: (data: *Render_Data, name: Name) -> u32 {
+    found := table_find_pointer(*data.texture_cache, name.id);
+    if found return cast(u32) found.view;
+
+    image := get_asset(Image_Data, name);
+    assert(image != null, "material: texture asset missing");
+    assert(image.pixels.data != null && image.width > 0 && image.height > 0,
+        "material: texture asset empty");
+
+    result, texture := gpu_create_texture(.{
+        dimensions = .[xx image.width, xx image.height, 1],
+        format = .R8G8B8A8_SRGB,
+        usage = .SAMPLED | .TRANSFER_DST,
+    });
+    assert(result == .SUCCESS && texture != 0, "material: texture creation failed");
+    // vkCopyMemoryToImage (host copy) needs VK_EXT_host_image_copy, which
+    // this device does not enable. Staged command copy like the texture
+    // example instead; one wait_idle at build time, no per-frame sync.
+    byte_count := cast(s64) image.width * cast(s64) image.height * 4;
+    staging, staging_gpu := gpu_malloc(byte_count);
+    assert(staging != null && staging_gpu != 0, "material: texture staging failed");
+    memcpy(staging, image.pixels.data, byte_count);
+    submit_result, cmd := gpu_start_command_recording(gpu_get_queue(.MAIN, 0));
+    assert(submit_result == .SUCCESS, "material: texture command recording failed");
+    copy_result := gpu_copy_to_texture(cmd, texture, staging_gpu);
+    assert(copy_result == .SUCCESS, "material: texture copy failed");
+    gpu_submit(cmd);
+    gpu_wait_idle();
+    gpu_free(staging);
+
+    view := gpu_texture_view(texture);
+    assert(view != 0, "material: texture view creation failed");
+    table_add(*data.texture_cache, name.id, Uploaded_Texture.{ texture = texture, view = view });
+    return cast(u32) view;
+}
+
 #scope_file
 
-// GPU blob layout: fragment bytes first (offset 0, preserves current shader
-// behavior), vertex bytes appended after. Emptiness is legal for vertex only;
-// the fragment caller asserts non-empty.
-build_stage :: (reflection: Shader_Reflection, builder: *String_Builder, seen: [..]string, path: string, stage: string) -> u64  {
+// Blob region layout: [params byte size u32][slot count u32][slots u32...]
+// [params bytes]. Slots hold resolved bindless indices in declaration order.
+// An empty region emits zero bytes (no header). Pass 1 measures and
+// validates, pass 2 emits the recipe struct and pack statements with final
+// offsets. root names the pack-proc pointer (frag/vert), base_off is the
+// region's byte offset in the blob.
+build_stage :: (reflection: Shader_Reflection, builder: *String_Builder, pack: *String_Builder, seen: [..]string, path: string, stage: string, root: string, base_off: s64) -> u64  {
+    params_bytes: s64 = 0;
+    params_count: s64 = 0;
+    slots: s64 = 0;
+    for reflection.decls {
+        kind := jay_material_decl_kind(it);
+        if kind == .UNSUPPORTED {
+            assert(false, "Material: unsupported parameter type % for '%' in %", it.type.name, it.name, path);
+        }
+        decl_name := it.name;
+        for s: seen {
+            assert(s != decl_name, "Material: duplicate material field % in %", decl_name, path);
+        }
+        array_add(*seen, decl_name);
+        if kind == .TEXTURE_2D || kind == .SAMPLER {
+            slots += 1;
+            continue;
+        }
+        params_count += 1;
+        assert(params_count == 1, "Material: one struct parameter per stage is supported (shader %)", path);
+        params_type := it.type;
+        assert(params_type.fields.count > 0, "Material: material parameter '%' must be a struct (shader %)", it.name, path);
+        for params_type.fields {
+            jai_name := jay_material_jai_name(it.type);
+            assert(jai_name.count > 0, "Material: unsupported field type % (shader %)", it.type.name, path);
+            field_size := jay_material_gpu_type_size(it.type);
+            assert(field_size > 0, "Material: zero-size field % (shader %)", it.name, path);
+            params_bytes += xx field_size;
+        }
+    }
+    if params_bytes == 0 && slots == 0 {
+        print_to_builder(builder, "%: struct {\n", stage);
+        print_to_builder(builder, "};\n");
+        return 0;
+    }
+
     print_to_builder(builder, "%: struct {\n", stage);
-
-    total_size : u64 = 0;
-
+    slot := 0;
+    params_off := base_off + 8 + slots * 4;
     for reflection.decls {
         kind := jay_material_decl_kind(it);
         if kind == .UNSUPPORTED then continue;
         if kind == .TEXTURE_2D {
-            assert(false, "Material: Jay::Texture2D not supported in V1 (shader %, field %). Use Jay::Params scalar/vector only.", path, it.name);
+            print_to_builder(builder, "    %: Name;\n", it.name);
+            print_to_builder(pack, "    (cast(*u32)(dst + %)).* = resolve_texture_index(data, %.%);\n", base_off + 8 + slot * 4, root, it.name);
+            slot += 1;
+            continue;
         }
         if kind == .SAMPLER {
-            assert(false, "Material: Jay::Sampler not supported in V1 (shader %, field %)", path, it.name);
+            print_to_builder(pack, "    (cast(*u32)(dst + %)).* = default_sampler_index(data);\n", base_off + 8 + slot * 4);
+            slot += 1;
+            continue;
         }
-        if kind != .PARAMS then continue;
-
-        for seen {
-            assert(it != seen[it_index], "Material: duplicate material field in %", path);
-        }
-
-        array_add(*seen, it.name);
-
-        params_type := it.type.generic_arg;
-        assert(params_type != null, "Material: Jay::Params missing generic arg (shader %, field %)", path, it.name);
-        assert(params_type.fields.count > 0, "Material: Jay::Params struct has no fields (shader %, field %)", path, it.name);
-
-        print_to_builder(builder, "    %: struct {\n", it.name);
-
+        params_type := it.type;
+        decl_name := it.name;
+        print_to_builder(builder, "    %: struct {\n", decl_name);
         for params_type.fields {
             jai_name := jay_material_jai_name(it.type);
-            assert(jai_name.count > 0, "Material: unsupported field type % (shader %)", it.type.name, path);
             print_to_builder(builder, "        %: %;\n", it.name, jai_name);
             field_size := jay_material_gpu_type_size(it.type);
-            assert(field_size > 0, "Material: zero-size field % (shader %)", it.name, path);
-            total_size += field_size;
+            print_to_builder(pack, "    (cast(*%)(dst + %)).* = %.%.%;\n", jai_name, params_off, root, decl_name, it.name);
+            params_off += xx field_size;
         }
-
-            print_to_builder(builder, "    };\n");
+        print_to_builder(builder, "    };\n");
     }
-
     print_to_builder(builder, "};\n");
 
-    return total_size;
+    print_to_builder(pack, "    (cast(*u32)(dst + %)).* = xx %;\n", base_off + 0, params_bytes);
+    print_to_builder(pack, "    (cast(*u32)(dst + %)).* = xx %;\n", base_off + 4, slots);
+    return xx (8 + slots * 4 + params_bytes);
 }
 
 Jay_Material_Kind :: enum {
@@ -211,10 +277,9 @@ Jay_Material_Kind :: enum {
 }
 
 jay_material_decl_kind :: (decl: Reflection_Decl) -> Jay_Material_Kind {
-    if decl.type.namespace != "Jay" return .UNSUPPORTED;
-    if decl.type.name == "Params" return .PARAMS;
-    if decl.type.name == "Texture2D" return .TEXTURE_2D;
-    if decl.type.name == "Sampler" return .SAMPLER;
+    if decl.type.resource_shape == .TEXTURE_2D return .TEXTURE_2D;
+    if decl.type.name == "SamplerState" return .SAMPLER;
+    if decl.type.kind == .STRUCT return .PARAMS;
     return .UNSUPPORTED;
 }
 

@@ -176,10 +176,18 @@ Jay_Render :: struct {
         camera.target = *render.viewport;
         camera.far = 50;
 
-        sin_t: float32 = xx sin(engine.timer.time);
+        // Static look-at: X-forward/Y-right/Z-up, camera looks at origin.
+        cam_pos := Vec3.{1.6, -2.0, 1.2};
+        cam_f := normalize(Vec3.{0, 0, 0} - cam_pos);
+        cam_r := normalize(cross(Vec3.{0, 0, 1}, cam_f));
+        cam_u := cross(cam_f, cam_r);
+        cam_basis: Mat3;
+        cam_basis._11 = cam_f.x;  cam_basis._21 = cam_f.y;  cam_basis._31 = cam_f.z;
+        cam_basis._12 = cam_r.x;  cam_basis._22 = cam_r.y;  cam_basis._32 = cam_r.z;
+        cam_basis._13 = cam_u.x;  cam_basis._23 = cam_u.y;  cam_basis._33 = cam_u.z;
         transform := to_matrix(Transform.{
-            translation = Vec3.{-20, -20 * sin_t, 20},
-            rotation = to_quat(Euler.{0, -45, 45 * sin_t}),
+            translation = cam_pos,
+            rotation = to_quat(cam_basis),
             scale = Vec3.new(1),
         });
 

@@ -1,5 +1,8 @@
 #scope_module
 
+#import "File";
+#import "String";
+
 create_pipelines :: (data: *Render_Data) {
     #run {
         compile_pipeline_shader("/shaders/compute/reset.slang");
@@ -8,8 +11,6 @@ create_pipelines :: (data: *Render_Data) {
         compile_pipeline_shader("/shaders/compute/scatter.slang");
         compile_pipeline_shader("/shaders/compute/build_draws.slang");
         compile_pipeline_shader("/shaders/compute/hiz_downsample.slang");
-        compile_pipeline_shader("/shaders/vertex/opaque.slang");
-        compile_pipeline_shader("/shaders/fragment/opaque.slang");
     }
 
     reset_spv   := get_asset(Shader_Data, "/shaders/compute/reset.slang");
@@ -87,4 +88,48 @@ compile_pipeline_shader :: (asset_path: string) {
     out_path := sprint("%/%", Paths.assets_out, sprint("%.jpkg", name.id));
     pkg := Shader_Data.{ code_words = spirv, reflection = "" };
     write(out_path, pkg);
+}
+
+// Material shaders expose an ordinary main() with material arguments. Compile
+// a virtual sibling source whose sole entry resolves one instance blob then
+// calls that function with native Slang values.
+compile_material_pipeline_shader :: (asset_path: string, reflection: Shader_Reflection) {
+    source_path := get_asset_source_path(asset_path);
+    assert(source_path.count > 0, "Jay_Render: shader source not found: %", asset_path);
+    source_dir := path_strip_filename(source_path);
+    source_name := string.{ data = source_path.data + source_dir.count, count = source_path.count - source_dir.count };
+    generated_path := sprint("%/_jay_material_entry.slang", source_dir);
+
+    generated: String_Builder;
+    print_to_builder(*generated, "#include \"%\"\n", source_name);
+    print_to_builder(*generated, "[shader(\"fragment\")]\nfloat4 _jay_main(Vertex_Output input) : SV_Target0 {\n");
+    print_to_builder(*generated, "    uint64_t blob = Jay::material_blob(input.instance_id);\n    return main(input");
+    slot := 0;
+    params_count := 0;
+    for reflection.decls {
+        if it.type.resource_shape == .TEXTURE_2D {
+            print_to_builder(*generated, ", g_textures_2d[Jay::slot_index(blob, %)]", slot);
+            slot += 1;
+        } else if it.type.name == "SamplerState" {
+            print_to_builder(*generated, ", g_samplers[Jay::slot_index(blob, %)]", slot);
+            slot += 1;
+        } else {
+            assert(it.type.kind == .STRUCT, "Material: unsupported main parameter %", it.name);
+            params_count += 1;
+            assert(params_count == 1, "Material: one struct parameter per fragment shader is supported");
+            print_to_builder(*generated, ", *(%*)Jay::params_blob(blob)", it.type.name);
+        }
+    }
+    print_to_builder(*generated, ");\n}\n");
+    generated_source := builder_to_string(*generated);
+    defer free(generated_source.data);
+
+    vfs := make_shader_vfs(get_asset_source, generated_path, generated_source);
+    defer cleanup_shader_vfs(vfs);
+    compiled, spirv := compile_shader(generated_path, "", DEBUG, vfs, DEBUG, "_jay_main");
+    defer if spirv.data free(spirv.data);
+    assert(compiled, "Jay_Render: material shader compilation failed: %", source_path);
+
+    name := Name.new(asset_path);
+    write(sprint("%/%.jpkg", Paths.assets_out, name.id), Shader_Data.{ code_words = spirv, reflection = "" });
 }
