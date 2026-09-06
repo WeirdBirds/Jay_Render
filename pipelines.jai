@@ -11,6 +11,8 @@ create_pipelines :: (data: *Render_Data) {
         compile_pipeline_shader("/shaders/compute/scatter.slang");
         compile_pipeline_shader("/shaders/compute/build_draws.slang");
         compile_pipeline_shader("/shaders/compute/hiz_downsample.slang");
+        compile_pipeline_shader("/shaders/vertex/oit_composite.slang");
+        compile_pipeline_shader("/shaders/fragment/oit_composite.slang");
     }
 
     reset_spv   := get_asset(Shader_Data, "/shaders/compute/reset.slang");
@@ -19,8 +21,10 @@ create_pipelines :: (data: *Render_Data) {
     scatter_spv := get_asset(Shader_Data, "/shaders/compute/scatter.slang");
     build_spv   := get_asset(Shader_Data, "/shaders/compute/build_draws.slang");
     hiz_spv     := get_asset(Shader_Data, "/shaders/compute/hiz_downsample.slang");
+    oit_vs_spv  := get_asset(Shader_Data, "/shaders/vertex/oit_composite.slang");
+    oit_fs_spv  := get_asset(Shader_Data, "/shaders/fragment/oit_composite.slang");
 
-    assert(reset_spv && cull_spv && prefix_spv && scatter_spv && build_spv && hiz_spv,
+    assert(reset_spv && cull_spv && prefix_spv && scatter_spv && build_spv && hiz_spv && oit_vs_spv && oit_fs_spv,
         "Jay_Render: shader asset loading failed");
 
     data.pipelines[0] = gpu_create_compute_pipeline(reset_spv.code_words, "Jay_Render reset");
@@ -28,6 +32,19 @@ create_pipelines :: (data: *Render_Data) {
     data.pipelines[2] = gpu_create_compute_pipeline(prefix_spv.code_words, "Jay_Render prefix");
     data.pipelines[3] = gpu_create_compute_pipeline(scatter_spv.code_words, "Jay_Render scatter");
     data.pipelines[4] = gpu_create_compute_pipeline(build_spv.code_words, "Jay_Render build draws");
+    data.pipelines[5] = gpu_create_graphics_pipeline(oit_vs_spv.code_words, oit_fs_spv.code_words, .{
+        cull = .NONE,
+        color_targets = .[.{
+            format = .B8G8R8A8_UNORM,
+            blend_state = .{
+                enabled = true,
+                src_color_factor = .SRC_ALPHA,
+                dst_color_factor = .ONE_MINUS_SRC_ALPHA,
+                src_alpha_factor = .ONE,
+                dst_alpha_factor = .ONE_MINUS_SRC_ALPHA,
+            },
+        }],
+    }, "Jay_Render weighted OIT composite");
     data.pipelines[6] = gpu_create_compute_pipeline(hiz_spv.code_words, "Jay_Render hiz downsample");
 
     // One graphics pipeline per registered material. Raster state follows
@@ -40,28 +57,44 @@ create_pipelines :: (data: *Render_Data) {
     for i: 0..material_registry_count - 1 {
         entry := material_registry[i];
         vs_spv := get_asset(Shader_Data, Name.{ id = entry.vertex_id });
-        fs_spv := get_asset(Shader_Data, Name.{ id = entry.fragment_id });
+        fragment_id := entry.fragment_id;
+        if entry.domain == cast(u32) Material_Domain.TRANSLUCENT fragment_id = entry.oit_fragment_id;
+        fs_spv := get_asset(Shader_Data, Name.{ id = fragment_id });
         assert(vs_spv && fs_spv, "Jay_Render: material shader asset loading failed");
 
         if entry.domain == cast(u32) Material_Domain.OPAQUE {
-            blend: Gpu_Blend_Desc = {};
             raster: Gpu_Raster_Desc = .{
                 cull = .CCW,
                 color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
                 depth_format = .D32_SFLOAT,
-                blend_state = *blend,
             };
             data.material_pipelines[i] = gpu_create_graphics_pipeline(vs_spv.code_words, fs_spv.code_words, raster, tprint("Jay_Render material % opaque", i));
         } else {
-            blend: Gpu_Blend_Desc = .{
-                src_color_factor = .SRC_ALPHA, dst_color_factor = .ONE_MINUS_SRC_ALPHA,
-                src_alpha_factor = .ONE, dst_alpha_factor = .ONE_MINUS_SRC_ALPHA,
-            };
             raster: Gpu_Raster_Desc = .{
                 cull = .CCW,
-                color_targets = .[ .{format = .B8G8R8A8_UNORM} ],
+                color_targets = .[
+                    .{
+                        format = .R16G16B16A16_SFLOAT,
+                        blend_state = .{
+                            enabled = true,
+                            src_color_factor = .ONE,
+                            dst_color_factor = .ONE,
+                            src_alpha_factor = .ONE,
+                            dst_alpha_factor = .ONE,
+                        },
+                    },
+                    .{
+                        format = .R16_SFLOAT,
+                        blend_state = .{
+                            enabled = true,
+                            src_color_factor = .ZERO,
+                            dst_color_factor = .ONE_MINUS_SRC_COLOR,
+                            src_alpha_factor = .ZERO,
+                            dst_alpha_factor = .ONE_MINUS_SRC_ALPHA,
+                        },
+                    },
+                ],
                 depth_format = .D32_SFLOAT,
-                blend_state = *blend,
             };
             data.material_pipelines[i] = gpu_create_graphics_pipeline(vs_spv.code_words, fs_spv.code_words, raster, tprint("Jay_Render material % translucent", i));
         }
@@ -93,7 +126,7 @@ compile_pipeline_shader :: (asset_path: string) {
 // Material shaders expose an ordinary main() with material arguments. Compile
 // a virtual sibling source whose sole entry resolves one instance blob then
 // calls that function with native Slang values.
-compile_material_pipeline_shader :: (asset_path: string, reflection: Shader_Reflection) {
+compile_material_pipeline_shader :: (asset_path: string, reflection: Shader_Reflection, weighted_oit: bool) {
     source_path := get_asset_source_path(asset_path);
     assert(source_path.count > 0, "Jay_Render: shader source not found: %", asset_path);
     source_dir := path_strip_filename(source_path);
@@ -102,8 +135,17 @@ compile_material_pipeline_shader :: (asset_path: string, reflection: Shader_Refl
 
     generated: String_Builder;
     print_to_builder(*generated, "#include \"%\"\n", source_name);
-    print_to_builder(*generated, "[shader(\"fragment\")]\nfloat4 _jay_main(Vertex_Output input) : SV_Target0 {\n");
-    print_to_builder(*generated, "    uint64_t blob = Jay::material_blob(input.instance_id);\n    return main(input");
+    if weighted_oit {
+        print_to_builder(*generated, "[shader(\"fragment\")]\nWeighted_OIT_Output _jay_main(Vertex_Output input) {\n");
+    } else {
+        print_to_builder(*generated, "[shader(\"fragment\")]\nfloat4 _jay_main(Vertex_Output input) : SV_Target0 {\n");
+    }
+    print_to_builder(*generated, "    uint64_t blob = Jay::material_blob(input.instance_id);\n");
+    if weighted_oit {
+        print_to_builder(*generated, "    return weighted_oit(main(input");
+    } else {
+        print_to_builder(*generated, "    return main(input");
+    }
     slot := 0;
     params_count := 0;
     for reflection.decls {
@@ -120,7 +162,11 @@ compile_material_pipeline_shader :: (asset_path: string, reflection: Shader_Refl
             print_to_builder(*generated, ", *(%*)Jay::params_blob(blob)", it.type.name);
         }
     }
-    print_to_builder(*generated, ");\n}\n");
+    if weighted_oit {
+        print_to_builder(*generated, "), input.position.z);\n}\n");
+    } else {
+        print_to_builder(*generated, ");\n}\n");
+    }
     generated_source := builder_to_string(*generated);
     defer free(generated_source.data);
 
@@ -131,5 +177,6 @@ compile_material_pipeline_shader :: (asset_path: string, reflection: Shader_Refl
     assert(compiled, "Jay_Render: material shader compilation failed: %", source_path);
 
     name := Name.new(asset_path);
+    if weighted_oit name = Name.new(sprint("%#weighted_oit", asset_path));
     write(sprint("%/%.jpkg", Paths.assets_out, name.id), Shader_Data.{ code_words = spirv, reflection = "" });
 }

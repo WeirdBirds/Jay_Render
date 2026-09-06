@@ -158,16 +158,20 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
 
     _, index_data_gpu := gpu_heap_head(data.index_allocator);
 
-    // Render pass A: opaque domains clear, translucent domains load.
-    // Pyramid builds from depth between them (translucent never writes it).
+    // Opaque writes swapchain color and depth. Pyramid builds from opaque
+    // depth before weighted transparent accumulation.
     record_domain_pass(cmd, data, image, depth_view, frame.params, frame.vertex_params_gpu,
         index_data_gpu, w, h, cast(u32) Material_Domain.OPAQUE, true);
 
     // Pyramid from this frame's depth (reverse-Z min-reduce).
     hiz_build(data, cmd);
 
-    record_domain_pass(cmd, data, image, depth_view, frame.params, frame.vertex_params_gpu,
-        index_data_gpu, w, h, cast(u32) Material_Domain.TRANSLUCENT, false);
+    if has_domain_groups(data, cast(u32) Material_Domain.TRANSLUCENT) {
+        record_domain_pass(cmd, data, image, depth_view, frame.params, frame.vertex_params_gpu,
+            index_data_gpu, w, h, cast(u32) Material_Domain.TRANSLUCENT, true);
+        gpu_barrier(cmd, .COLOR_ATTACHMENT_OUTPUT, .PIXEL_SHADER);
+        composite_transparency(cmd, data, image, frame.vertex_params_gpu, w, h);
+    }
 
     // Main-A: render + pyramid. Submit it before recording the rescue chain so
     // the pyramid read by pass B is ordered after the writes on the timeline.
@@ -236,8 +240,12 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
         // pass-A content stay hidden, identical re-writes rejected.
         record_domain_pass(cmd_b, data, image, depth_view, frame.params_b, frame.vertex_params_b_gpu,
             index_data_gpu, w, h, cast(u32) Material_Domain.OPAQUE, false);
-        record_domain_pass(cmd_b, data, image, depth_view, frame.params_b, frame.vertex_params_b_gpu,
-            index_data_gpu, w, h, cast(u32) Material_Domain.TRANSLUCENT, false);
+        if has_domain_groups(data, cast(u32) Material_Domain.TRANSLUCENT) {
+            record_domain_pass(cmd_b, data, image, depth_view, frame.params_b, frame.vertex_params_b_gpu,
+                index_data_gpu, w, h, cast(u32) Material_Domain.TRANSLUCENT, true);
+            gpu_barrier(cmd_b, .COLOR_ATTACHMENT_OUTPUT, .PIXEL_SHADER);
+            composite_transparency(cmd_b, data, image, frame.vertex_params_b_gpu, w, h);
+        }
 
         gpu_submit_and_present(cmd_b, waits = .[rescue_done]);
     }
@@ -266,15 +274,20 @@ record_domain_pass :: (
     index_data_gpu: Gpu_Ptr, w: u32, h: u32,
     domain: u32, clear: bool
 ) {
-    if data.group_pool.max == 0 return;
+    found := has_domain_groups(data, domain);
+    if !found && !(domain == cast(u32) Material_Domain.OPAQUE && clear) return;
 
-    found := false;
-    for g: 0..data.group_pool.max - 1 {
-        if material_registry[data.groups_cpu[g].pipeline].domain == domain { found = true; break; }
-    }
-    if !found return;
-
-    if clear {
+    if domain == cast(u32) Material_Domain.TRANSLUCENT {
+        gpu_begin_render_pass(cmd, .{
+            color_targets = .[
+                .{ view = render.viewport.oit_accumulator_view, load_op = .CLEAR, store_op = .STORE,
+                   clear_color._float = .[0.0, 0.0, 0.0, 0.0] },
+                .{ view = render.viewport.oit_revealage_view, load_op = .CLEAR, store_op = .STORE,
+                   clear_color._float = .[1.0, 0.0, 0.0, 0.0] },
+            ],
+            depth_target = .{ view = depth_view, load_op = .LOAD, store_op = .STORE },
+        });
+    } else if clear {
         gpu_begin_render_pass(cmd, .{
             color_targets = .[
                 .{ view = image, load_op = .CLEAR, store_op = .STORE,
@@ -315,5 +328,28 @@ record_domain_pass :: (
         }
     }
 
+    gpu_end_render_pass(cmd);
+}
+
+has_domain_groups :: (data: *Render_Data, domain: u32) -> bool {
+    if data.group_pool.max == 0 return false;
+    for g: 0..data.group_pool.max - 1 {
+        if material_registry[data.groups_cpu[g].pipeline].domain == domain return true;
+    }
+    return false;
+}
+
+composite_transparency :: (
+    cmd: Gpu_Command_Buffer, data: *Render_Data, image: Gpu_Texture_View,
+    vertex_params_gpu: Gpu_Ptr, w: u32, h: u32
+) {
+    gpu_begin_render_pass(cmd, .{
+        color_targets = .[.{ view = image, load_op = .LOAD, store_op = .STORE }],
+    });
+    gpu_set_viewport(cmd, .{x=0, y=0, width=xx w, height=xx h, min_depth=0, max_depth=1});
+    gpu_set_scissor(cmd, .{x=0, y=0, width=xx w, height=xx h});
+    result := gpu_set_pipeline(cmd, data.pipelines[5]);
+    #if DEBUG { assert(result == .SUCCESS); }
+    gpu_draw_instanced(cmd, vertex_params_gpu, data.fragment_params_gpu, 3, 1);
     gpu_end_render_pass(cmd);
 }

@@ -3,9 +3,10 @@ Material_Domain :: enum u32 {
     TRANSLUCENT :: 1;
 }
 Material_Entry :: struct {
-    vertex_id:   u64;
-    fragment_id: u64;
-    domain:      u32;
+    vertex_id:       u64;
+    fragment_id:     u64;
+    oit_fragment_id: u64;
+    domain:          u32;
 }
 
 #no_reset material_registry: [MAX_MATERIALS] Material_Entry;
@@ -23,7 +24,7 @@ Material :: struct(vs_name: string, fs_name: string, domain: Material_Domain = .
         vertex_decls: Shader_Reflection;
         fragment_decls := get_shader_declarations(fragment_path, vfs);
         defer free_shader_declarations(*fragment_decls);
-        compile_material_pipeline_shader(fs_name, fragment_decls);
+        compile_material_pipeline_shader(fs_name, fragment_decls, domain == .TRANSLUCENT);
 
         // Register the (vertex, fragment, domain) triple. Same triple from
         // any module reuses one index; the runtime builds one pipeline each.
@@ -41,7 +42,13 @@ Material :: struct(vs_name: string, fs_name: string, domain: Material_Domain = .
         }
         if material_index < 0 {
             assert(material_registry_count < MAX_MATERIALS, "Material: registry full");
-            material_registry[material_registry_count] = .{ vertex_id = v_id, fragment_id = f_id, domain = domain_rank };
+            oit_id := Name.new(sprint("%#weighted_oit", fs_name)).id;
+            material_registry[material_registry_count] = .{
+                vertex_id = v_id,
+                fragment_id = f_id,
+                oit_fragment_id = oit_id,
+                domain = domain_rank,
+            };
             material_index = material_registry_count;
             material_registry_count += 1;
         }

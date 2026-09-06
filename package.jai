@@ -112,6 +112,7 @@ Jay_Render :: struct {
         render.data_initialized = true;
         create_pipelines(*render.data);
         create_depth_buffer();
+        create_transparency_buffers();
         hiz_init(*render.data);
 
         log("Jay_Render started");
@@ -150,8 +151,9 @@ Jay_Render :: struct {
             gpu_wait_idle();
             gpu_swapchain_resize(xx w, xx h);
             recreate_depth_buffer();
+            recreate_transparency_buffers();
             hiz_recreate(*render.data);
-            if !render.viewport.depth return;
+            if !render.viewport.depth || !render.viewport.oit_accumulator_view return;
             render.framebuffer_resized = false;
         }
 
@@ -217,6 +219,7 @@ renderer_shutdown :: () {
         render.data_initialized = false;
     }
 
+    destroy_transparency_buffers();
     destroy_depth_buffer();
 
     if render.swapchain_initialized {

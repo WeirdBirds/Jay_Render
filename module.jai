@@ -52,6 +52,7 @@
 #load "renderer.jai";
 #load "hiz.jai";
 #load "depth.jai";
+#load "transparency.jai";
 #load "pipelines.jai";
 #load "frame.jai";
 #load "package.jai";

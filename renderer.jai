@@ -17,6 +17,11 @@ Render_Target :: struct {
     image: Gpu_Texture_View;
     depth: Gpu_Texture_View;
     depth_buffer: Gpu_Texture;
+
+    oit_accumulator: Gpu_Texture;
+    oit_accumulator_view: Gpu_Texture_View;
+    oit_revealage: Gpu_Texture;
+    oit_revealage_view: Gpu_Texture_View;
 }
 
 Queues :: struct {

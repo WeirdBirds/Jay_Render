@@ -81,6 +81,8 @@ Vertex_Params :: struct {
 
 Fragment_Params :: struct {
     instances: Gpu_Ptr;
+    oit_accumulator: u32;
+    oit_revealage: u32;
 }
 
 Frame_Params :: struct {
