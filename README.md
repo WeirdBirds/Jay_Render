@@ -5,7 +5,7 @@ indirect indexed draws, Slang shaders, SDL3 windows, dynamic rendering, and
 three SGPU-owned frames in flight.
 
 `Jay_Render` owns renderer lifecycle and consumes caller-provided scene data.
-`main.jai` owns the development cow scene.
+`main.jai` owns the development camera scene.
 
 ## Import configuration
 
@@ -82,20 +82,19 @@ never moves.
 
 ## Compile-time materials
 
-`Opaque_Material :: Material(vertex = ..., fragment = ...)` generates its
-recipe struct from ordinary Slang `main` function parameters. A fragment
-function may accept one struct parameter, `Texture2D` parameters, and
-`SamplerState` parameters. The generated Jai recipe mirrors struct fields and
-uses texture asset names for texture parameters. No hand-written host mirror
-exists.
+`Material(vertex = ..., fragment = ..., domain = ...)` generates its recipe
+struct from ordinary Slang `main` function parameters. A stage may accept
+reflected struct parameters, `Texture2D` parameters, and `SamplerState`
+parameters. The generated Jai recipe mirrors struct fields and uses texture
+asset names for texture parameters. No hand-written host mirror exists.
 
 Jay_Render generates private `_jay_main` entry point code. It loads one
 instance material blob, resolves bindless resource slots, then calls authored
 `main` with normal Slang values. `upload_material` packs that blob,
 deduplicates identical recipes by hash, and returns a direct GPU pointer
-(`Material_Id`). Each `Mesh_Instance` stores that pointer. Draw groups contain
-only mesh identity, so same-mesh material variants share one indirect draw
-group.
+(`Material_Id`). Each `Mesh_Instance` stores that pointer. Draw groups contain mesh identity, domain, and a domain-local pipeline index.
+Same-mesh material variants share one pipeline when their reflected shader
+schemas match.
 
 Pipeline `#run` owns Slang packaging (no generic slang handler): it compiles
 each shader and writes its `Shader_Data` package, so runtime `get_asset` loads

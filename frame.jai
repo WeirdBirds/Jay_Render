@@ -115,33 +115,33 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     // Zero this frame's counter slot before its chains add to it (the ring is
     // read three frames later, so the slot must hold only this frame's work:
     // reset -> A adds -> hiz adds -> B adds).
-    reset_pipeline_result := gpu_set_pipeline(compute_cmd, data.pipelines[0]);
+    reset_pipeline_result := gpu_set_pipeline(compute_cmd, data.pipelines[Render_Pipeline_Id.RESET]);
     #if DEBUG { assert(reset_pipeline_result == .SUCCESS); }
     gg := max(xx 1, (data.group_pool.max + 63) / 64);
     gpu_dispatch(compute_cmd, frame.params_gpu, u32.[xx gg, 1, 1]);
     gpu_barrier(compute_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
     // Pass 1: Count-Cull A (frustum + history)
-    cull_pipeline_result := gpu_set_pipeline(compute_cmd, data.pipelines[1]);
+    cull_pipeline_result := gpu_set_pipeline(compute_cmd, data.pipelines[Render_Pipeline_Id.COUNT_CULL]);
     #if DEBUG { assert(cull_pipeline_result == .SUCCESS); }
     ig := max(xx 1, (data.instance_pool.max + 63) / 64);
     gpu_dispatch(compute_cmd, frame.params_gpu, u32.[xx ig, 1, 1]);
     gpu_barrier(compute_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
     // Pass 2: Prefix A
-    prefix_pipeline_result := gpu_set_pipeline(compute_cmd, data.pipelines[2]);
+    prefix_pipeline_result := gpu_set_pipeline(compute_cmd, data.pipelines[Render_Pipeline_Id.PREFIX]);
     #if DEBUG { assert(prefix_pipeline_result == .SUCCESS); }
     gpu_dispatch(compute_cmd, frame.params_gpu, u32.[1, 1, 1]);
     gpu_barrier(compute_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
     // Pass 3: Scatter A
-    scatter_pipeline_result := gpu_set_pipeline(compute_cmd, data.pipelines[3]);
+    scatter_pipeline_result := gpu_set_pipeline(compute_cmd, data.pipelines[Render_Pipeline_Id.SCATTER]);
     #if DEBUG { assert(scatter_pipeline_result == .SUCCESS); }
     gpu_dispatch(compute_cmd, frame.params_gpu, u32.[xx ig, 1, 1]);
     gpu_barrier(compute_cmd, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
     // Pass 4: Build draws A
-    build_pipeline_result := gpu_set_pipeline(compute_cmd, data.pipelines[4]);
+    build_pipeline_result := gpu_set_pipeline(compute_cmd, data.pipelines[Render_Pipeline_Id.BUILD_DRAWS]);
     #if DEBUG { assert(build_pipeline_result == .SUCCESS); }
     gpu_dispatch(compute_cmd, frame.params_gpu, u32.[xx gg, 1, 1]);
 
@@ -159,7 +159,7 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
     _, index_data_gpu := gpu_heap_head(data.index_allocator);
 
     // Opaque writes swapchain color and depth. Pyramid builds from opaque
-    // depth before weighted transparent accumulation.
+    // depth before translucent accumulation.
     record_domain_pass(cmd, data, image, depth_view, frame.params, frame.vertex_params_gpu,
         index_data_gpu, w, h, cast(u32) Material_Domain.OPAQUE, true);
 
@@ -200,7 +200,7 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
         // Reset the SHARED scratch first. Chain B accumulates via atomic adds;
         // without this it stacks onto pass A's counts and pass B re-draws the
         // whole scene (was 9ms for a handful of rescued cows).
-        reset_pipeline_result_b := gpu_set_pipeline(compute_b, data.pipelines[0]);
+        reset_pipeline_result_b := gpu_set_pipeline(compute_b, data.pipelines[Render_Pipeline_Id.RESET]);
         #if DEBUG { assert(reset_pipeline_result_b == .SUCCESS); }
         gpu_dispatch(compute_b, frame.params_b_gpu, u32.[xx gg, 1, 1]);
         gpu_barrier(compute_b, .COMPUTE_SHADER, .COMPUTE_SHADER);
@@ -208,22 +208,22 @@ render_frame :: (data: *Render_Data, main_queue: Gpu_Queue, compute_queue: Gpu_Q
         // Rescue chain B: retest every pass-A reject against the fresh pyramid.
         gpu_barrier(compute_b, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
-        cull_pipeline_result_b := gpu_set_pipeline(compute_b, data.pipelines[1]);
+        cull_pipeline_result_b := gpu_set_pipeline(compute_b, data.pipelines[Render_Pipeline_Id.COUNT_CULL]);
         #if DEBUG { assert(cull_pipeline_result_b == .SUCCESS); }
         gpu_dispatch(compute_b, frame.params_b_gpu, u32.[xx ig, 1, 1]);
         gpu_barrier(compute_b, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
-        prefix_pipeline_result_b := gpu_set_pipeline(compute_b, data.pipelines[2]);
+        prefix_pipeline_result_b := gpu_set_pipeline(compute_b, data.pipelines[Render_Pipeline_Id.PREFIX]);
         #if DEBUG { assert(prefix_pipeline_result_b == .SUCCESS); }
         gpu_dispatch(compute_b, frame.params_b_gpu, u32.[1, 1, 1]);
         gpu_barrier(compute_b, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
-        scatter_pipeline_result_b := gpu_set_pipeline(compute_b, data.pipelines[3]);
+        scatter_pipeline_result_b := gpu_set_pipeline(compute_b, data.pipelines[Render_Pipeline_Id.SCATTER]);
         #if DEBUG { assert(scatter_pipeline_result_b == .SUCCESS); }
         gpu_dispatch(compute_b, frame.params_b_gpu, u32.[xx ig, 1, 1]);
         gpu_barrier(compute_b, .COMPUTE_SHADER, .COMPUTE_SHADER);
 
-        build_pipeline_result_b := gpu_set_pipeline(compute_b, data.pipelines[4]);
+        build_pipeline_result_b := gpu_set_pipeline(compute_b, data.pipelines[Render_Pipeline_Id.BUILD_DRAWS]);
         #if DEBUG { assert(build_pipeline_result_b == .SUCCESS); }
         gpu_dispatch(compute_b, frame.params_b_gpu, u32.[xx gg, 1, 1]);
 
@@ -274,15 +274,17 @@ record_domain_pass :: (
     index_data_gpu: Gpu_Ptr, w: u32, h: u32,
     domain: u32, clear: bool
 ) {
+    assert(domain == cast(u32) Material_Domain.OPAQUE || domain == cast(u32) Material_Domain.TRANSLUCENT,
+        "Jay_Render: unsupported material domain");
     found := has_domain_groups(data, domain);
     if !found && !(domain == cast(u32) Material_Domain.OPAQUE && clear) return;
 
     if domain == cast(u32) Material_Domain.TRANSLUCENT {
         gpu_begin_render_pass(cmd, .{
             color_targets = .[
-                .{ view = render.viewport.oit_accumulator_view, load_op = .CLEAR, store_op = .STORE,
+                .{ view = render.viewport.translucent_color_view, load_op = .CLEAR, store_op = .STORE,
                    clear_color._float = .[0.0, 0.0, 0.0, 0.0] },
-                .{ view = render.viewport.oit_revealage_view, load_op = .CLEAR, store_op = .STORE,
+                .{ view = render.viewport.translucent_coverage_view, load_op = .CLEAR, store_op = .STORE,
                    clear_color._float = .[1.0, 0.0, 0.0, 0.0] },
             ],
             depth_target = .{ view = depth_view, load_op = .LOAD, store_op = .STORE },
@@ -311,30 +313,55 @@ record_domain_pass :: (
     gpu_set_scissor(cmd, .{x=0, y=0, width=xx w, height=xx h});
     if domain == cast(u32) Material_Domain.OPAQUE {
         gpu_set_depth_stencil_state(cmd, .{ depth_test = .GREATER, depth_mode = .READ | .WRITE });
+        record_opaque_groups(cmd, data, params, vertex_params_gpu, index_data_gpu);
     } else {
         gpu_set_depth_stencil_state(cmd, .{ depth_test = .GREATER, depth_mode = .READ });
+        record_translucent_groups(cmd, data, params, vertex_params_gpu, index_data_gpu);
     }
 
-    for i: 0..data.material_pipeline_count - 1 {
-        if material_registry[i].domain != domain continue;
-        pipe_result := gpu_set_pipeline(cmd, data.material_pipelines[i]);
+    gpu_end_render_pass(cmd);
+}
+
+record_opaque_groups :: (
+    cmd: Gpu_Command_Buffer, data: *Render_Data, params: *Draw_Params,
+    vertex_params_gpu: Gpu_Ptr, index_data_gpu: Gpu_Ptr
+) {
+    for i: 0..data.opaque_pipeline_count - 1 {
+        pipe_result := gpu_set_pipeline(cmd, data.opaque_pipelines[i]);
         #if DEBUG { assert(pipe_result == .SUCCESS); }
         for g: 0..data.group_pool.max - 1 {
-            if data.groups_cpu[g].pipeline != cast(u32) i continue;
+            group := data.groups_cpu[g];
+            if group.domain != cast(u32) Material_Domain.OPAQUE || group.pipeline != cast(u32) i continue;
             args := params.draw_commands + cast(Gpu_Ptr)(xx g * size_of(Draw_Indexed_Command));
             draw_result := gpu_draw_indexed_indirect(cmd, vertex_params_gpu, data.fragment_params_gpu,
                 index_data_gpu, args);
             #if DEBUG { assert(draw_result == .SUCCESS); }
         }
     }
+}
 
-    gpu_end_render_pass(cmd);
+record_translucent_groups :: (
+    cmd: Gpu_Command_Buffer, data: *Render_Data, params: *Draw_Params,
+    vertex_params_gpu: Gpu_Ptr, index_data_gpu: Gpu_Ptr
+) {
+    for i: 0..data.translucent_pipeline_count - 1 {
+        pipe_result := gpu_set_pipeline(cmd, data.translucent_pipelines[i]);
+        #if DEBUG { assert(pipe_result == .SUCCESS); }
+        for g: 0..data.group_pool.max - 1 {
+            group := data.groups_cpu[g];
+            if group.domain != cast(u32) Material_Domain.TRANSLUCENT || group.pipeline != cast(u32) i continue;
+            args := params.draw_commands + cast(Gpu_Ptr)(xx g * size_of(Draw_Indexed_Command));
+            draw_result := gpu_draw_indexed_indirect(cmd, vertex_params_gpu, data.fragment_params_gpu,
+                index_data_gpu, args);
+            #if DEBUG { assert(draw_result == .SUCCESS); }
+        }
+    }
 }
 
 has_domain_groups :: (data: *Render_Data, domain: u32) -> bool {
     if data.group_pool.max == 0 return false;
     for g: 0..data.group_pool.max - 1 {
-        if material_registry[data.groups_cpu[g].pipeline].domain == domain return true;
+        if data.groups_cpu[g].domain == domain return true;
     }
     return false;
 }
@@ -348,7 +375,7 @@ composite_transparency :: (
     });
     gpu_set_viewport(cmd, .{x=0, y=0, width=xx w, height=xx h, min_depth=0, max_depth=1});
     gpu_set_scissor(cmd, .{x=0, y=0, width=xx w, height=xx h});
-    result := gpu_set_pipeline(cmd, data.pipelines[5]);
+    result := gpu_set_pipeline(cmd, data.pipelines[Render_Pipeline_Id.TRANSLUCENT_COMPOSITE]);
     #if DEBUG { assert(result == .SUCCESS); }
     gpu_draw_instanced(cmd, vertex_params_gpu, data.fragment_params_gpu, 3, 1);
     gpu_end_render_pass(cmd);

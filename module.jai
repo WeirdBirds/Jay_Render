@@ -18,26 +18,26 @@
 
 #if DEBUG {
     #if RENDER_CAPTURE {
-        #import "sgpu"(VALIDATION = true, DEBUG_ASSERTS = true, RENDER_CAPTURE = true, SLANG_COMPILER = true, DEBUG_MARKERS = true);
+        #import "sgpu"(VALIDATION = true, DEBUG_ASSERTS = true, RENDER_CAPTURE = true, SLANG_COMPILER = true, DEBUG_MARKERS = true, SLANG_VFS = get_slang_vfs);
     } else {
-        #import "sgpu"(VALIDATION = true, DEBUG_ASSERTS = true, RENDER_CAPTURE = false, SLANG_COMPILER = true, DEBUG_MARKERS = true);
+        #import "sgpu"(VALIDATION = true, DEBUG_ASSERTS = true, RENDER_CAPTURE = false, SLANG_COMPILER = true, DEBUG_MARKERS = true, SLANG_VFS = get_slang_vfs);
     }
 } else {
     #if RENDER_CAPTURE {
-        #import "sgpu"(VALIDATION = false, DEBUG_ASSERTS = false, RENDER_CAPTURE = true, SLANG_COMPILER = true, DEBUG_MARKERS = true);
+        #import "sgpu"(VALIDATION = false, DEBUG_ASSERTS = false, RENDER_CAPTURE = true, SLANG_COMPILER = true, DEBUG_MARKERS = true, SLANG_VFS = get_slang_vfs);
     } else {
-        #import "sgpu"(VALIDATION = false, DEBUG_ASSERTS = false, RENDER_CAPTURE = false, SLANG_COMPILER = true, DEBUG_MARKERS = false);
+        #import "sgpu"(VALIDATION = false, DEBUG_ASSERTS = false, RENDER_CAPTURE = false, SLANG_COMPILER = true, DEBUG_MARKERS = false, SLANG_VFS = get_slang_vfs);
     }
 }
 
 #import "Basic";
 #import "File";
 #import "File_Utilities";
-#import "Hash_Table";
 #import "Jay_Core";
 #import "Jay_Package";
 #import "Jay_Utils";
 #import "Window_Creation"(DEFAULT_MSAA = 1);
+#import "Hash_Table";
 #import "jai-sdl3";
 
 #load "primitives/bounds.jai";
@@ -74,4 +74,17 @@ validate_render_config :: () {
     assert(INDEX_HEAP_BUDGET > 0 && INDEX_HEAP_BUDGET <= S64_MAX - 64, "INDEX_HEAP_BUDGET is invalid");
     assert(GPU_HEAP_ALIGNMENT > 0, "GPU_HEAP_ALIGNMENT must be positive");
     assert(GPU_HEAP_GROWTH_FACTOR > 1 && GPU_HEAP_GROWTH_FACTOR <= 8, "GPU_HEAP_GROWTH_FACTOR must be in (1, 8]");
+}
+
+
+get_slang_vfs :: () -> *void {
+    return xx make_shader_vfs(get_shader_source);
+}
+
+
+get_shader_source :: (path: string) -> string {
+    found, shader := table_find(*_generated_shaders, path);
+    if found return shader;
+
+    return get_asset_source(path);
 }

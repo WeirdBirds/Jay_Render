@@ -126,7 +126,7 @@ hiz_init :: (data: *Render_Data) {
         assert(hiz.sampler != 0, "hiz: sampler creation failed");
     }
 
-    hiz.pipeline = data.pipelines[6];
+    hiz.pipeline = data.pipelines[Render_Pipeline_Id.HIZ_DOWNSAMPLE];
     hiz.created = true;
 
     #if DEBUG log("hiz: base %x% (% mips)", hiz.base_width, hiz.base_height, hiz.mips);

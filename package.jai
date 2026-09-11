@@ -153,7 +153,7 @@ Jay_Render :: struct {
             recreate_depth_buffer();
             recreate_transparency_buffers();
             hiz_recreate(*render.data);
-            if !render.viewport.depth || !render.viewport.oit_accumulator_view return;
+            if !render.viewport.depth || !render.viewport.translucent_color_view return;
             render.framebuffer_resized = false;
         }
 

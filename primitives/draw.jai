@@ -1,10 +1,16 @@
-new_draw_group :: (data: *Render_Data, mesh_id: u32, pipeline: u32) -> u32 {
+new_draw_group :: (data: *Render_Data, mesh_id: u32, pipeline: u32, domain: Material_Domain) -> u32 {
     assert(data.group_pool.thumbstones.count > 0 || data.group_pool.max < MAX_GROUPS,
         "Jay_Render: MAX_GROUPS reached");
-    assert(pipeline < MAX_MATERIALS, "Jay_Render: invalid material pipeline");
+    assert(domain == .OPAQUE || domain == .TRANSLUCENT,
+        "Jay_Render: unsupported material domain");
+    if domain == .OPAQUE {
+        assert(pipeline < data.opaque_pipeline_count, "Jay_Render: invalid opaque pipeline");
+    } else {
+        assert(pipeline < data.translucent_pipeline_count, "Jay_Render: invalid translucent pipeline");
+    }
 
     group_id := get_index(*data.group_pool);
-    data.groups_cpu[group_id] = .{mesh_id = mesh_id, pipeline = pipeline};
+    data.groups_cpu[group_id] = .{mesh_id = mesh_id, pipeline = pipeline, domain = cast(u32) domain};
     #if DEBUG { assert(group_id < MAX_GROUPS); }
     return group_id;
 }
@@ -59,21 +65,19 @@ Draw_Params :: struct {
     draw_count:         Gpu_Ptr;
 }
 
-// pipeline is the material registry index: one indirect draw group per
-// (mesh, pipeline) pair. Same 16-byte stride; the shader mirror keeps
-// padding in this slot because shaders only read mesh_id.
+// Each group identifies a material pipeline by domain and that domain's
+// local pipeline index. Same 16-byte stride; shaders only read mesh_id.
 Draw_Group :: struct {
     mesh_id:  u32;
     pipeline: u32;
-    padding1: u32;
-    padding2: u32;
+    domain:   u32;
+    padding:  u32;
 }
 
 Draw_Indexed_Command :: struct {
     index_count:    u32;
     instance_count: u32;
     first_index:    u32;
-    vertex_offset:  u32;
+    vertex_offset:  s32;
     first_instance: u32;
-    padding:        u32;
 }

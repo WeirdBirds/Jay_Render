@@ -1,152 +1,302 @@
 Material_Domain :: enum u32 {
-    OPAQUE      :: 0;
-    TRANSLUCENT :: 1;
-}
-Material_Entry :: struct {
-    vertex_id:       u64;
-    fragment_id:     u64;
-    oit_fragment_id: u64;
-    domain:          u32;
+    OPAQUE;
+    TRANSLUCENT;
 }
 
-#no_reset material_registry: [MAX_MATERIALS] Material_Entry;
-#no_reset material_registry_count: s64;
+Material_Stage :: enum u32 {
+    VERTEX   :: 1;
+    FRAGMENT :: 2;
+}
+
+Material_Entry :: struct {
+    vertex_id:       Name;
+    fragment_id:     Name;
+}
+
+#no_reset opaque_registry: [MAX_MATERIALS] Material_Entry;
+#no_reset opaque_registry_count: s64;
+
+#no_reset translucent_registry: [MAX_MATERIALS] Material_Entry;
+#no_reset translucent_registry_count: s64;
+
+_generated_shaders: Table(string, string);
+_generated_types: Table(Shader_Type, string);
 
 Material :: struct(vs_name: string, fs_name: string, domain: Material_Domain = .OPAQUE) {
     #insert -> string {
+        body_builder: String_Builder;
+
         vertex_path := get_asset_source_path(vs_name);
         fragment_path := get_asset_source_path(fs_name);
-        assert(vertex_path.count > 0 && fragment_path.count > 0, "Material: shader asset path not found");
 
-        compile_pipeline_shader(vs_name);
-        vfs := make_shader_vfs(get_asset_source);
-        defer cleanup_shader_vfs(vfs);
-        vertex_decls: Shader_Reflection;
-        fragment_decls := get_shader_declarations(fragment_path, vfs);
-        defer free_shader_declarations(*fragment_decls);
-        compile_material_pipeline_shader(fs_name, fragment_decls, domain == .TRANSLUCENT);
+        vertex_reflection := get_shader_reflection(vertex_path);
+        fragment_reflection := get_shader_reflection(fragment_path);
 
-        // Register the (vertex, fragment, domain) triple. Same triple from
-        // any module reuses one index; the runtime builds one pipeline each.
-        v_id := Name.new(vs_name).id;
-        f_id := Name.new(fs_name).id;
-        domain_rank := cast(u32) domain;
-        material_index: s64 = -1;
-        for i: 0..material_registry_count - 1 {
-            entry := material_registry[i];
-            if entry.vertex_id == v_id && entry.fragment_id == f_id {
-                assert(entry.domain == domain_rank, "Material: same shaders with different domains (%)", vs_name);
-                material_index = i;
-                break;
-            }
-        }
-        if material_index < 0 {
-            assert(material_registry_count < MAX_MATERIALS, "Material: registry full");
-            oit_id := Name.new(sprint("%#weighted_oit", fs_name)).id;
-            material_registry[material_registry_count] = .{
-                vertex_id = v_id,
-                fragment_id = f_id,
-                oit_fragment_id = oit_id,
-                domain = domain_rank,
-            };
-            material_index = material_registry_count;
-            material_registry_count += 1;
+        v_id := Name.new(vs_name);
+        f_id := Name.new(fs_name);
+        fragment_package_id := f_id;
+        if domain == .TRANSLUCENT {
+            fragment_package_id = Name.new(sprint("%/translucent", fs_name));
         }
 
-        builder: String_Builder;
+        material_index := register_material(domain, v_id, fragment_package_id);
 
-        total_size: u64 = 0;
+        packer_builder: String_Builder;
 
-        // ---- vertex + fragment stages (Params, Texture2D, Sampler) ----
-        pack: String_Builder;
+        print_to_builder(*body_builder, "MATERIAL_INDEX :: %;\n", material_index);
+        print_to_builder(*body_builder, "vertex: struct {\n");
+            vertex_end := generate_wrappers(vertex_reflection, *body_builder, *packer_builder, .VERTEX, "vertex", 0);
+        print_to_builder(*body_builder, "};\n");
+        print_to_builder(*body_builder, "fragment: struct {\n");
+            total := generate_wrappers(fragment_reflection, *body_builder, *packer_builder, .FRAGMENT, "fragment", vertex_end);
+        print_to_builder(*body_builder, "};\n\n");
+        emit_upload_proc(*body_builder, *packer_builder, total);
 
-        vertex_seen: [..] string;
-        vertex_seen.allocator = temp;
-        vertex_size := build_stage(vertex_decls, *builder, *pack, vertex_seen, vertex_path, "vertex", "vert", 0);
+        compile_stage_wrapper(vertex_path, vertex_reflection, 0, .VERTEX, v_id.id, domain);
+        compile_stage_wrapper(fragment_path, fragment_reflection, vertex_end, .FRAGMENT, fragment_package_id.id, domain);
 
-        fragment_seen: [..] string;
-        fragment_seen.allocator = temp;
-
-        fragment_size := build_stage(fragment_decls, *builder, *pack, fragment_seen, fragment_path, "fragment", "frag", xx vertex_size);
-        total_size = fragment_size + vertex_size;
-
-        print_to_builder(*builder, "VERTEX_SIZE :: %;\n", vertex_size);
-        print_to_builder(*builder, "FRAGMENT_SIZE :: %;\n", fragment_size);
-
-        print_to_builder(*builder, "CONSTANTS_SIZE :: %;\n", total_size);
-        print_to_builder(*builder, "MATERIAL_INDEX :: %;\n", material_index);
-        print_to_builder(*builder, "DOMAIN :: %;\n", domain_rank);
-        print_to_builder(*builder, "pack_material :: (data: *Render_Data, frag: *$F, vert: *$V, dst: *u8) {\n");
-        pack_str := builder_to_string(*pack);
-        defer free(pack_str.data);
-        print_to_builder(*builder, "%", pack_str);
-        print_to_builder(*builder, "}\n");
-
-        return builder_to_string(*builder);
+        body_text := builder_to_string(*body_builder);
+        return body_text;
     }
 }
 
-// Upload a compile-time material recipe. V1: fragment-only Params blob,
-// deduplicated by recipe hash. Returns a direct GPU pointer (Material_Id).
-// The recipe value has call-site lifetime only and may be discarded after return.
-upload_material :: (data: *Render_Data, recipe: *$M) -> Material_Id {
-    size := xx M.CONSTANTS_SIZE;
-    frag_size := xx M.FRAGMENT_SIZE;
-    vert_size := xx M.VERTEX_SIZE;
-    assert(size <= 65536, "upload_material: invalid CONSTANTS_SIZE");
-    assert(size == frag_size + vert_size, "upload_material: size mismatch");
-
-    // Empty material: no bytes, no allocation. All empty recipes share id 0;
-    // shaders without material fields never dereference it.
-    if size == 0 return cast(Material_Id) 0;
-
-    cpu, gpu := gpu_malloc(size);
-    assert(cpu != null && gpu != 0, "upload_material: GPU allocation failed");
-    M.pack_material(data, *recipe.fragment, *recipe.vertex, cpu);
-
-    // Hash the packed bytes: recipes hold paths and padding, the blob is
-    // canonical. Allocating before dedup wastes one alloc on hits only.
-    hash: u64 = 14695981039346656037;
-    packed := cast(*u8) cpu;
-    for i: 0..size-1 {
-        hash ^= xx (packed + i).*;
-        hash *= 1099511628211;
-    }
-    hash ^= cast(u64) type_info(M);
-    hash *= 1099511628211;
-
-    found := table_find_pointer(*data.material_cache, hash);
-    if found {
-        found.ref_count += 1;
-        gpu_free(cpu);
-        return found.id;
-    }
-
-    id := cast(Material_Id) gpu;
-    table_add(*data.material_cache, hash, Uploaded_Material.{ id = id, item_hash = hash, ref_count = 1, allocation = cpu, gpu = gpu, size = size });
-    return id;
+upload_material :: (data: *Render_Data, material: $M) -> Material_Id {
+    return M.upload(data, material);
 }
 
-release_material :: (data: *Render_Data, id: Material_Id) {
-    // V1: find by id, decrement refcount; free GPU allocation when zero.
-    // Demo never releases during a frame; shutdown frees remaining entries.
-    found_key: u64 = 0;
-    found_it := false;
-    for data.material_cache {
-        if it.id == id {
-            found_key = it_index;
-            found_it = true;
-            break;
+#scope_module
+
+register_material :: (domain: Material_Domain, vertex_id: Name, fragment_id: Name) -> s64 {
+    assert(domain == .OPAQUE || domain == .TRANSLUCENT,
+        "Material: unsupported domain");
+    registry := ifx domain == .OPAQUE then *opaque_registry else *translucent_registry;
+    registry_count := ifx domain == .OPAQUE then *opaque_registry_count else *translucent_registry_count;
+    assert(registry_count.* < MAX_MATERIALS, "Material: % registry full", domain);
+
+    material_index := registry_count.*;
+    registry.*[material_index] = .{
+        vertex_id = vertex_id,
+        fragment_id = fragment_id,
+    };
+    registry_count.* += 1;
+    return material_index;
+}
+
+is_vertex_output :: (shader_type: Shader_Type) -> bool {
+    if !shader_type return false;
+    if shader_type.kind != .STRUCT return false;
+    return shader_type.name == "Vertex_Output";
+}
+
+is_uint32 :: (shader_type: Shader_Type) -> bool {
+    if !shader_type return false;
+    if shader_type.kind != .SCALAR return false;
+    return shader_type.(*Shader_Type_Scalar).scalar_type == .UINT32;
+}
+
+is_float4 :: (shader_type: Shader_Type) -> bool {
+    if !shader_type return false;
+    if shader_type.kind != .VECTOR return false;
+    type := shader_type.(*Shader_Type_Vector);
+    return type.scalar_type == .FLOAT32 && type.scalar_count == 4;
+}
+
+emit_upload_proc :: (body_builder: *String_Builder, packer_builder: *String_Builder, total: s64) {
+    // Generated upload: all blob management inline, numbers baked.
+    // Structs memcpy whole, resources resolve to indices in place.
+    packer_text := builder_to_string(packer_builder);
+    defer free(packer_text);
+    print_to_builder(body_builder, "upload :: (data: *Render_Data, material: Material(vs_name, fs_name, domain)) -> Material_Id {\n");
+    if total == 0 {
+        print_to_builder(body_builder, "    return cast(Material_Id) 0;\n");
+    } else {
+        print_to_builder(body_builder, "    cpu, gpu := gpu_malloc(%);\n", total);
+        print_to_builder(body_builder, "    assert(cpu != null && gpu != 0, \"Material: GPU allocation failed\");\n");
+        print_to_builder(body_builder, "    cpu8 := cast(*u8) cpu;\n");
+        print_to_builder(body_builder, "%", packer_text);
+        print_to_builder(body_builder, "    hash: u64 = 14695981039346656037;\n");
+        print_to_builder(body_builder, "    for i: 0..%-1 {\n", total);
+        print_to_builder(body_builder, "        hash ^= xx (cpu8 + i).*;\n");
+        print_to_builder(body_builder, "        hash *= 1099511628211;\n");
+        print_to_builder(body_builder, "    }\n");
+        print_to_builder(body_builder, "    found := table_find_pointer(*data.material_cache, hash);\n");
+        print_to_builder(body_builder, "    if found {\n");
+        print_to_builder(body_builder, "        found.ref_count += 1;\n");
+        print_to_builder(body_builder, "        gpu_free(cpu);\n");
+        print_to_builder(body_builder, "        return found.id;\n");
+        print_to_builder(body_builder, "    }\n");
+        print_to_builder(body_builder, "    id := cast(Material_Id) gpu;\n");
+        print_to_builder(body_builder, "    table_add(*data.material_cache, hash, Uploaded_Material.{ id = id, item_hash = hash, ref_count = 1, allocation = cpu, gpu = gpu, size = % });\n", total);
+        print_to_builder(body_builder, "    return id;\n");
+    }
+    print_to_builder(body_builder, "}\n");
+}
+
+// Every material stage compiles through a generated wrapper, never the
+// user source. The wrapper lives in _generated_shaders under a virtual
+// sibling path, so relative includes resolve against the real dir.
+compile_stage_wrapper :: (asset_path: string, reflection: Shader_Reflection, base_off: s64, stage: Material_Stage, package_id: u64, domain: Material_Domain) {
+    asset_dir := path_strip_filename(asset_path);
+    asset_file := string.{ data = asset_path.data + asset_dir.count, count = asset_path.count - asset_dir.count };
+    generated_path := sprint("%/_generated_%.slang", asset_dir, package_id);
+    wrapper_text := make_shader_wrapper(reflection, asset_file, stage, base_off, domain);
+    table_add(*_generated_shaders, generated_path, wrapper_text);
+    compiled, spirv := compile_shader(generated_path, "", null, "_jay_main");
+    defer if spirv.data free(spirv.data);
+    assert(compiled, "Jay_Render: material shader compilation failed: %", asset_path);
+    write(sprint("%/%.jpkg", Paths.assets_out, package_id), Shader_Data.{ code_words = spirv, reflection = "" });
+}
+
+// One shared layout pass: finds main, counts system args, measures the
+// params region and slots. Both the recipe generator and the shader
+// wrapper generator consume it, so the two sides cannot drift apart.
+stage_schema :: (reflection: *Shader_Reflection, stage: Material_Stage) -> (*Shader_Function, s64, s64, s64) {
+    main_func: *Shader_Function = null;
+    system_args: s64 = 0;
+    params_bytes: s64 = 0;
+    slots: s64 = 0;
+    for reflection.functions {
+        if it.name == "main" main_func = *reflection.functions[it_index];
+    }
+    assert(main_func != null, "Material: % shader has no main function", stage);
+
+    if stage == {
+        case .VERTEX; system_args = 2;
+        case .FRAGMENT; system_args = 1;
+    }
+
+    for system_args..main_func.args.count-1 {
+        decl := main_func.args[it];
+        assert(decl.type != null, "Material: parameter % has no reflected type", decl.name);
+        if decl.type.kind == .STRUCT {
+            t := decl.type.(*Shader_Type_Struct);
+            params_bytes = (params_bytes + t.alignment - 1) / t.alignment * t.alignment + xx t.stride;
+            continue;
+        }
+        if decl.type.kind == .RESOURCE {
+            assert(decl.type.(*Shader_Type_Resource).shape == .TEXTURE_2D,
+                "Material: only Texture2D resources are supported, got %", decl.name);
+            slots += 1;
+            continue;
+        }
+        if decl.type.kind == .SAMPLER_STATE {
+            slots += 1;
+            continue;
+        }
+        assert(false, "Material: unsupported top-level parameter %", decl.name);
+    }
+    return main_func, system_args, params_bytes, slots;
+}
+
+make_shader_wrapper :: (reflection: Shader_Reflection, source_name: string, stage: Material_Stage, base_off: s64, domain: Material_Domain = .OPAQUE) -> string {
+    main_func, system_args, _, slots := stage_schema(*reflection, stage);
+    translucent := stage == .FRAGMENT && domain == .TRANSLUCENT;
+    params_base := base_off + 8 + slots * 4;
+
+    builder: String_Builder;
+    print_to_builder(*builder, "#include \"%\"\n", source_name);
+    if stage == .VERTEX {
+        print_to_builder(*builder, "[shader(\"vertex\")]\nVertex_Output _jay_main(uint vertex_id : SV_VulkanVertexID, uint instance_id : SV_VulkanInstanceID) {\n");
+        print_to_builder(*builder, "    uint64_t blob = Jay::material_blob(instance_id);\n");
+        print_to_builder(*builder, "    return main(vertex_id, instance_id");
+    } else {
+        if translucent {
+            print_to_builder(*builder, "[shader(\"fragment\")]\nTranslucent_Fragment _jay_main(Vertex_Output input) {\n");
+        } else {
+            print_to_builder(*builder, "[shader(\"fragment\")]\nfloat4 _jay_main(Vertex_Output input) : SV_Target0 {\n");
+        }
+        print_to_builder(*builder, "    uint64_t blob = Jay::material_blob(input.instance_id);\n");
+        if translucent {
+            print_to_builder(*builder, "    return translucent_fragment(main(input");
+        } else {
+            print_to_builder(*builder, "    return main(input");
         }
     }
-    if !found_it return;
-    entry := table_find_pointer(*data.material_cache, found_key);
-    if !entry return;
-    entry.ref_count -= 1;
-    if entry.ref_count <= 0 {
-        gpu_free(entry.allocation);
-        table_remove(*data.material_cache, found_key);
+
+    params_off := params_base;
+    slot := 0;
+    for system_args..main_func.args.count-1 {
+        decl := main_func.args[it];
+        if decl.type.kind == .STRUCT {
+            t := decl.type.(*Shader_Type_Struct);
+            params_off = (params_off + t.alignment - 1) / t.alignment * t.alignment;
+            print_to_builder(*builder, ", *(%*)(Jay::params_blob(blob) + %)", decl.type.name, params_off - params_base);
+            params_off += xx t.stride;
+        } else if decl.type.kind == .SAMPLER_STATE {
+            print_to_builder(*builder, ", g_samplers[Jay::slot_index(blob, %)]", slot);
+            slot += 1;
+        } else {
+            print_to_builder(*builder, ", g_textures_2d[Jay::slot_index(blob, %)]", slot);
+            slot += 1;
+        }
     }
+    if translucent {
+        print_to_builder(*builder, "), input.position.z);\n}\n");
+    } else {
+        print_to_builder(*builder, ");\n}\n");
+    }
+    return builder_to_string(*builder);
+}
+
+generate_wrappers :: (reflection: Shader_Reflection, body_builder: *String_Builder, packer_builder: *String_Builder, stage: Material_Stage, root: string, base_off: s64) -> s64 {
+    main_func, system_args, params_bytes, slots := stage_schema(*reflection, stage);
+
+    // Leading system arguments are engine-owned. Everything after them is
+    // material schema. Only types are enforced; argument names stay loose.
+    if stage == {
+        case .VERTEX;
+            assert(is_vertex_output(main_func.return_type),
+                "Material: vertex main must return Vertex_Output. Check the return type; the vertex stage feeds the fragment stage through it.");
+            assert(main_func.args.count >= 2,
+                "Material: vertex main needs two leading uint arguments (vertex id, instance id), got %", main_func.args.count);
+            assert(is_uint32(main_func.args[0].type) && is_uint32(main_func.args[1].type),
+                "Material: vertex main leading arguments must both be uint (vertex id, instance id).");
+        case .FRAGMENT;
+            assert(is_float4(main_func.return_type),
+                "Material: fragment main must return float4. Opaque output is plain color; translucent conversion happens in the generated wrapper, not in user code.");
+            assert(main_func.args.count >= 1,
+                "Material: fragment main needs a leading Vertex_Output input, got %", main_func.args.count);
+            assert(is_vertex_output(main_func.args[0].type),
+                "Material: fragment main first argument must be Vertex_Output carrying the interpolated vertex data.");
+    }
+
+    // Blob region layout matches common.slang: [params byte size u32]
+    // [slot count u32][slots u32...][params bytes]. Schema measured above;
+    // here only emit with final offsets.
+    // An empty region emits zero bytes, not even a header.
+    if params_bytes == 0 && slots == 0 return base_off;
+
+    params_base := base_off + 8 + slots * 4;
+    print_to_builder(packer_builder, "    (cast(*u32)(cpu8 + %)).* = xx %;\n", base_off + 0, params_bytes);
+    print_to_builder(packer_builder, "    (cast(*u32)(cpu8 + %)).* = xx %;\n", base_off + 4, slots);
+    params_off := params_base;
+    slot := 0;
+    for system_args..main_func.args.count-1 {
+        decl := main_func.args[it];
+        if decl.type.kind == .STRUCT {
+            t := decl.type.(*Shader_Type_Struct);
+            params_off = (params_off + t.alignment - 1) / t.alignment * t.alignment;
+            type_name := slang_to_jai(decl.type);
+            assert(type_name.count > 0, "Material: unsupported struct parameter %", decl.name);
+            print_to_builder(body_builder, "\t%: %;\n", decl.name, type_name);
+            print_to_builder(packer_builder, "    memcpy(cpu8 + %, *material.%.%, %);\n", params_off, root, decl.name, xx t.stride);
+            params_off += xx t.stride;
+            continue;
+        }
+        if decl.type.kind == .RESOURCE {
+            slot_off := base_off + 8 + slot * 4;
+            print_to_builder(body_builder, "\t%: Name;\n", decl.name);
+            print_to_builder(packer_builder, "    (cast(*u32)(cpu8 + %)).* = resolve_texture_index(data, material.%.%);\n", slot_off, root, decl.name);
+            slot += 1;
+            continue;
+        }
+        // SAMPLER_STATE is the only remaining kind; measured above.
+        slot_off := base_off + 8 + slot * 4;
+        print_to_builder(packer_builder, "    (cast(*u32)(cpu8 + %)).* = default_sampler_index(data);\n", slot_off);
+        slot += 1;
+    }
+
+    return params_base + params_bytes;
 }
 
 // SamplerState parameters resolve to the stock sampler.
@@ -175,9 +325,6 @@ resolve_texture_index :: (data: *Render_Data, name: Name) -> u32 {
         usage = .SAMPLED | .TRANSFER_DST,
     });
     assert(result == .SUCCESS && texture != 0, "material: texture creation failed");
-    // vkCopyMemoryToImage (host copy) needs VK_EXT_host_image_copy, which
-    // this device does not enable. Staged command copy like the texture
-    // example instead; one wait_idle at build time, no per-frame sync.
     byte_count := cast(s64) image.width * cast(s64) image.height * 4;
     staging, staging_gpu := gpu_malloc(byte_count);
     assert(staging != null && staging_gpu != 0, "material: texture staging failed");
@@ -198,177 +345,248 @@ resolve_texture_index :: (data: *Render_Data, name: Name) -> u32 {
 
 #scope_file
 
-// Blob region layout: [params byte size u32][slot count u32][slots u32...]
-// [params bytes]. Slots hold resolved bindless indices in declaration order.
-// An empty region emits zero bytes (no header). Pass 1 measures and
-// validates, pass 2 emits the recipe struct and pack statements with final
-// offsets. root names the pack-proc pointer (frag/vert), base_off is the
-// region's byte offset in the blob.
-build_stage :: (reflection: Shader_Reflection, builder: *String_Builder, pack: *String_Builder, seen: [..]string, path: string, stage: string, root: string, base_off: s64) -> u64  {
-    params_bytes: s64 = 0;
-    params_count: s64 = 0;
-    slots: s64 = 0;
-    for reflection.decls {
-        kind := jay_material_decl_kind(it);
-        if kind == .UNSUPPORTED {
-            assert(false, "Material: unsupported parameter type % for '%' in %", it.type.name, it.name, path);
-        }
-        decl_name := it.name;
-        for s: seen {
-            assert(s != decl_name, "Material: duplicate material field % in %", decl_name, path);
-        }
-        array_add(*seen, decl_name);
-        if kind == .TEXTURE_2D || kind == .SAMPLER {
-            slots += 1;
+to_jai_type_name :: (name: string) -> string {
+    builder: String_Builder;
+    init_string_builder(*builder);
+    defer free_buffers(*builder);
+
+    is_lower :: (c: u8) -> bool {
+        return c >= #char "a" && c <= #char "z";
+    }
+
+    is_upper :: (c: u8) -> bool {
+        return c >= #char "A" && c <= #char "Z";
+    }
+
+    is_digit :: (c: u8) -> bool {
+        return c >= #char "0" && c <= #char "9";
+    }
+
+    is_alpha :: (c: u8) -> bool {
+        return is_lower(c) || is_upper(c);
+    }
+
+    to_upper :: (c: u8) -> u8 {
+        if is_lower(c) return cast(u8)(c - #char "a" + #char "A");
+        return c;
+    }
+
+    to_lower :: (c: u8) -> u8 {
+        if is_upper(c) return cast(u8)(c - #char "A" + #char "a");
+        return c;
+    }
+
+    word_start := true;
+    wrote_any  := false;
+    pending_sep := false;
+
+    i := 0;
+    while i < name.count {
+        c := name[i];
+
+        prev: u8 = 0;
+        next: u8 = 0;
+
+        if i > 0 then prev = name[i - 1];
+        if i + 1 < name.count then next = name[i + 1];
+
+        // Anything except ASCII letters/digits is a word separator.
+        if !is_alpha(c) && !is_digit(c) {
+            if wrote_any {
+                word_start = true;
+                pending_sep = true;
+            }
+
+            i += 1;
             continue;
         }
-        params_count += 1;
-        assert(params_count == 1, "Material: one struct parameter per stage is supported (shader %)", path);
-        params_type := it.type;
-        assert(params_type.fields.count > 0, "Material: material parameter '%' must be a struct (shader %)", it.name, path);
-        for params_type.fields {
-            jai_name := jay_material_jai_name(it.type);
-            assert(jai_name.count > 0, "Material: unsupported field type % (shader %)", it.type.name, path);
-            field_size := jay_material_gpu_type_size(it.type);
-            assert(field_size > 0, "Material: zero-size field % (shader %)", it.name, path);
-            params_bytes += xx field_size;
+
+        camel_boundary := is_upper(c) && i > 0 && (is_lower(prev) || (is_upper(prev) && is_lower(next)));
+
+        if camel_boundary {
+            append(*builder, #char "_");
+            pending_sep = false;
+            word_start = true;
+        } else if pending_sep {
+            append(*builder, #char "_");
+            pending_sep = false;
         }
-    }
-    if params_bytes == 0 && slots == 0 {
-        print_to_builder(builder, "%: struct {\n", stage);
-        print_to_builder(builder, "};\n");
-        return 0;
+
+        // Identifier cannot start with a digit.
+        if !wrote_any && is_digit(c) {
+            append(*builder, #char "_");
+        }
+
+        if word_start && is_alpha(c) {
+            append(*builder, to_upper(c));
+            word_start = false;
+        } else if is_alpha(c) {
+            append(*builder, to_lower(c));
+        } else {
+            append(*builder, c);
+            word_start = false;
+        }
+
+        wrote_any = true;
+        i += 1;
     }
 
-    print_to_builder(builder, "%: struct {\n", stage);
-    slot := 0;
-    params_off := base_off + 8 + slots * 4;
-    for reflection.decls {
-        kind := jay_material_decl_kind(it);
-        if kind == .UNSUPPORTED then continue;
-        if kind == .TEXTURE_2D {
-            print_to_builder(builder, "    %: Name;\n", it.name);
-            print_to_builder(pack, "    (cast(*u32)(dst + %)).* = resolve_texture_index(data, %.%);\n", base_off + 8 + slot * 4, root, it.name);
-            slot += 1;
-            continue;
-        }
-        if kind == .SAMPLER {
-            print_to_builder(pack, "    (cast(*u32)(dst + %)).* = default_sampler_index(data);\n", base_off + 8 + slot * 4);
-            slot += 1;
-            continue;
-        }
-        params_type := it.type;
-        decl_name := it.name;
-        print_to_builder(builder, "    %: struct {\n", decl_name);
-        for params_type.fields {
-            jai_name := jay_material_jai_name(it.type);
-            print_to_builder(builder, "        %: %;\n", it.name, jai_name);
-            field_size := jay_material_gpu_type_size(it.type);
-            print_to_builder(pack, "    (cast(*%)(dst + %)).* = %.%.%;\n", jai_name, params_off, root, decl_name, it.name);
-            params_off += xx field_size;
-        }
-        print_to_builder(builder, "    };\n");
-    }
-    print_to_builder(builder, "};\n");
-
-    print_to_builder(pack, "    (cast(*u32)(dst + %)).* = xx %;\n", base_off + 0, params_bytes);
-    print_to_builder(pack, "    (cast(*u32)(dst + %)).* = xx %;\n", base_off + 4, slots);
-    return xx (8 + slots * 4 + params_bytes);
+    return builder_to_string(*builder);
 }
 
-Jay_Material_Kind :: enum {
-    UNSUPPORTED;
-    PARAMS;
-    TEXTURE_2D;
-    SAMPLER;
+#import "Compiler";
+
+GENERATED_TYPE_SCOPE :: #code {};
+
+build_jai_struct :: (shader_type: *Shader_Type_Struct, name: string) -> string {
+    builder: String_Builder;
+    defer free_buffers(*builder);
+
+    print_to_builder(*builder, "#scope_export\n% :: struct {\n", name);
+    for field: shader_type.fields {
+        field_name := slang_to_jai(field.type);
+        assert(field_name.count > 0, "Material: unsupported field %.%", shader_type.name, field.name);
+        print_to_builder(*builder, "    %: %;\n", field.name, field_name);
+    }
+
+    print_to_builder(*builder, "}\n\n#run validate_shader_mirror(%, %, %, .[", name, shader_type.stride, shader_type.alignment);
+    for field: shader_type.fields {
+        if it_index > 0 print_to_builder(*builder, ", ");
+        print_to_builder(*builder, "%", field.offset);
+    }
+
+    print_to_builder(*builder, "]);\n");
+
+    return builder_to_string(*builder);
 }
 
-jay_material_decl_kind :: (decl: Reflection_Decl) -> Jay_Material_Kind {
-    if decl.type.resource_shape == .TEXTURE_2D return .TEXTURE_2D;
-    if decl.type.name == "SamplerState" return .SAMPLER;
-    if decl.type.kind == .STRUCT return .PARAMS;
-    return .UNSUPPORTED;
+validate_shader_mirror :: ($T: Type, stride: u64, alignment: s64, offsets: []u64) {
+    // Jai includes tail padding in size_of; Slang reports it separately as stride.
+    assert(size_of(T) == stride, "Material: % Jai size % does not match shader stride %", T, size_of(T), stride);
+
+    Alignment :: struct { prefix: u8; value: T; }
+    sample: Alignment;
+    jai_alignment := cast(s64) *sample.value - cast(s64) *sample;
+    assert(jai_alignment == alignment, "Material: % Jai alignment % does not match shader alignment %", T, jai_alignment, alignment);
+
+    info := type_info(T);
+    assert(info.members.count == offsets.count, "Material: % field count does not match shader layout", T);
+    for member: info.members {
+        assert(cast(u64) member.offset_in_bytes == offsets[it_index],
+            "Material: %.% Jai offset % does not match shader offset %", T, member.name, member.offset_in_bytes, offsets[it_index]);
+    }
 }
 
-// Map a scalar/vector reflection type to a Jai type name. "" when unsupported.
-jay_material_jai_name :: (type: *Reflection_Type) -> string {
-    if !type return "";
+slang_to_jai :: (shader_type: Shader_Type) -> string {
+    if !shader_type return "";
 
-    if type.kind == .SCALAR {
-        // FLOAT16 has no Jai mirror; VOID/NONE are not material data.
-        if type.scalar_type == {
-            case .BOOL;   return "bool";
-            case .INT8;   return "s8";
-            case .UINT8;  return "u8";
-            case .INT16;  return "s16";
-            case .UINT16; return "u16";
-            case .INT32;  return "s32";
-            case .UINT32; return "u32";
-            case .INT64;   return "s64";
-            case .INTPTR;  return "s64";
-            case .UINT64;  return "u64";
-            case .UINTPTR; return "u64";
-            case .FLOAT32; return "float32";
-            case .FLOAT64; return "float64";
+    found, cached_name := table_find(*_generated_types, shader_type);
+    if found return cached_name;
+
+    return build_jai_type(shader_type);
+}
+
+build_jai_type :: (shader_type: Shader_Type) -> string {
+    if shader_type.kind == {
+        case .SCALAR; {
+            type := shader_type.(*Shader_Type_Scalar);
+            // Slang bool occupies four bytes in uniform data; Jai bool occupies one.
+            // FLOAT16 has no Jai mirror; VOID/NONE are not material data.
+            if type.scalar_type == {
+                case .BOOL;   return "u32";
+                case .INT8;   return "s8";
+                case .UINT8;  return "u8";
+                case .INT16;  return "s16";
+                case .UINT16; return "u16";
+                case .INT32;  return "s32";
+                case .UINT32; return "u32";
+                case .INT64;   return "s64";
+                case .INTPTR;  return "s64";
+                case .UINT64;  return "u64";
+                case .UINTPTR; return "u64";
+                case .FLOAT32; return "float32";
+                case .FLOAT64; return "float64";
+            }
+            assert(false, "Scalar type % is illegal for scalar variables.", type.scalar_type);        }
+
+        case .ARRAY; {
+            type := shader_type.(*Shader_Type_Array);
+            element_name := slang_to_jai(type.element_type);
+            assert(element_name.count > 0, "Material: unsupported array element type %", type.element_type.name);
+            return sprint("[%]%", type.element_count, element_name);
         }
-        return "";
-    }
-    // VECTOR is always rows == 1 (probe-verified). Matrices arrive as MATRIX.
-    if type.kind == .VECTOR {
-        components := type.row_count * type.column_count;
 
-        if type.scalar_type == {
-            case .FLOAT32; {
-                if components == {
-                    case 2; return "Vec2";
-                    case 3; return "Vec3";
-                    case 4; return "Vec4";
+        case .VECTOR; {
+            type := shader_type.(*Shader_Type_Vector);
+            components := type.scalar_count;
+
+            if type.scalar_type == {
+                case .FLOAT32; {
+                    if components == {
+                        case 2; return "Vec2";
+                        case 3; return "Vec3";
+                        case 4; return "Vec4";
+                    }
+                }
+                case .FLOAT64; {
+                    if components == {
+                        case 2; return "Vec2d";
+                        case 3; return "Vec3d";
+                        case 4; return "Vec4d";
+                    }
                 }
             }
-            case .FLOAT64; {
-                if components == {
-                    case 2; return "Vec2d";
-                    case 3; return "Vec3d";
-                    case 4; return "Vec4d";
-                }
-            }
+            assert(false, "Scalar type % is illegal for vector variables", type.scalar_type);
         }
-    }
-    if type.kind == .MATRIX {
-        components := type.row_count * type.column_count;
+        case .MATRIX; {
+            type := shader_type.(*Shader_Type_Matrix);
+            assert(type.layout == .ROW_MAJOR, "Material: column-major matrix field found, only row-major mirrors are supported. Remove the column_major qualifier from the shader field and check the Slang session matrix layout mode. Jai Matrix stores rows contiguously, so a column-major shader matrix would read back transposed.");
+            components := type.row_count * type.column_count;
 
-        if type.scalar_type == {
-            case .FLOAT32; {
-                if components == {
-                    case 4;  return "Mat2";
-                    case 9;  return "Mat3";
-                    case 12; return "Mat4x3";
-                    case 16; return "Mat4";
+            if type.scalar_type == {
+                case .FLOAT32; {
+                    if components == {
+                        case 4;  return "Mat2";
+                        case 9;  return "Mat3";
+                        case 12; return "Mat4x3";
+                        case 16; return "Mat4";
+                    }
+                }
+                case .FLOAT64; {
+                    if components == {
+                        case 4;  return "Mat2d";
+                        case 9;  return "Mat3d";
+                        case 12; return "Mat4x3d";
+                        case 16; return "Mat4d";
+                    }
                 }
             }
-            case .FLOAT64; {
-                if components == {
-                    case 4;  return "Mat2d";
-                    case 9;  return "Mat3d";
-                    case 12; return "Mat4x3d";
-                    case 16; return "Mat4d";
-                }
-            }
+            assert(false, "Material: unsupported matrix shape %x%", type.row_count, type.column_count);
+        }
+
+        case .STRUCT; {
+            type: *Shader_Type_Struct = shader_type.(*Shader_Type_Struct);
+            name := to_jai_type_name(type.name);
+            body := build_jai_struct(type, name);
+            defer free(body);
+            add_build_string(body, -1, GENERATED_TYPE_SCOPE);
+            table_add(*_generated_types, shader_type, name);
+            return name;
+        }
+        case .RESOURCE; {
+            type := shader_type.(*Shader_Type_Resource);
+            // Texture assets resolve through the asset system at upload time,
+            // so the recipe holds a Name, not GPU data.
+            if type.shape == .TEXTURE_2D return "Name";
+        }
+        case .SAMPLER_STATE; {
+            // Samplers resolve to the stock sampler at upload time.
+            // No recipe field needed; the slot still counts in declaration order.
+            return "";
+        }
+        case; {
+            log_warning("Unsupported shader type kind: %: %", shader_type.name, shader_type.kind);
         }
     }
     return "";
-}
-
-jay_material_gpu_type_size :: (type: *Reflection_Type) -> u64 {
-    if !type return 0;
-    if type.kind == .SCALAR {
-        return slang_scalar_byte_size(type.scalar_type);
-    }
-    if type.kind == .VECTOR {
-        return slang_scalar_byte_size(type.scalar_type) * xx (type.row_count * type.column_count);
-    }
-    if type.kind == .MATRIX {
-        return slang_scalar_byte_size(type.scalar_type) * xx (type.row_count * type.column_count);
-    }
-    return 0;
 }

@@ -18,10 +18,10 @@ Render_Target :: struct {
     depth: Gpu_Texture_View;
     depth_buffer: Gpu_Texture;
 
-    oit_accumulator: Gpu_Texture;
-    oit_accumulator_view: Gpu_Texture_View;
-    oit_revealage: Gpu_Texture;
-    oit_revealage_view: Gpu_Texture_View;
+    translucent_color: Gpu_Texture;
+    translucent_color_view: Gpu_Texture_View;
+    translucent_coverage: Gpu_Texture;
+    translucent_coverage_view: Gpu_Texture_View;
 }
 
 Queues :: struct {

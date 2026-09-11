@@ -45,12 +45,14 @@ Render_Data :: struct {
     poll_ms:    float64;
 
     hiz: HiZ_Data;
-    pipelines: [7]Gpu_Pipeline;
+    pipelines: [Render_Pipeline_Id.COUNT]Gpu_Pipeline;
 
-    // One graphics pipeline per material registry entry (unified array).
-    // groups_cpu[g].pipeline indexes this array.
-    material_pipelines: [MAX_MATERIALS]Gpu_Pipeline;
-    material_pipeline_count: s64;
+    // Per-domain graphics pipelines. A draw group stores its domain and the
+    // local index into that domain's array.
+    opaque_pipelines: [MAX_MATERIALS]Gpu_Pipeline;
+    opaque_pipeline_count: s64;
+    translucent_pipelines: [MAX_MATERIALS]Gpu_Pipeline;
+    translucent_pipeline_count: s64;
 
     frames_logged: u64;       // monotonic frame counter for the log line
 
@@ -81,8 +83,8 @@ Vertex_Params :: struct {
 
 Fragment_Params :: struct {
     instances: Gpu_Ptr;
-    oit_accumulator: u32;
-    oit_revealage: u32;
+    translucent_color:    u32;
+    translucent_coverage: u32;
 }
 
 Frame_Params :: struct {
@@ -209,8 +211,11 @@ render_data_destroy :: (data: *Render_Data) {
     for *pipeline: data.pipelines {
         if pipeline.* != 0 gpu_free_pipeline(pipeline.*);
     }
-    for i: 0..data.material_pipeline_count - 1 {
-        if data.material_pipelines[i] != 0 gpu_free_pipeline(data.material_pipelines[i]);
+    for i: 0..data.opaque_pipeline_count - 1 {
+        if data.opaque_pipelines[i] != 0 gpu_free_pipeline(data.opaque_pipelines[i]);
+    }
+    for i: 0..data.translucent_pipeline_count - 1 {
+        if data.translucent_pipelines[i] != 0 gpu_free_pipeline(data.translucent_pipelines[i]);
     }
 
     hiz_destroy(data);
