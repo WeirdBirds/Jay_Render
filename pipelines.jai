@@ -59,10 +59,8 @@ create_pipelines :: (data: *Render_Data) {
     assert(data.pipelines[Render_Pipeline_Id.TRANSLUCENT_COMPOSITE] != 0, "Jay_Render: translucent composite pipeline creation failed");
     data.pipelines[Render_Pipeline_Id.HIZ_DOWNSAMPLE] = gpu_create_compute_pipeline(hiz_spv.code_words, "Jay_Render hiz downsample");
 
-    assert(opaque_registry_count + translucent_registry_count > 0,
-        "Jay_Render: no materials registered");
-    assert(opaque_registry_count <= MAX_MATERIALS && translucent_registry_count <= MAX_MATERIALS,
-        "Jay_Render: material registry exceeds capacity");
+    // assert(opaque_registry_count + translucent_registry_count > 0, "Jay_Render: no materials registered");
+    assert(opaque_registry_count <= MAX_MATERIALS && translucent_registry_count <= MAX_MATERIALS, "Jay_Render: material registry exceeds capacity");
 
     data.opaque_pipeline_count = opaque_registry_count;
     if opaque_registry_count > 0 {

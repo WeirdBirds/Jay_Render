@@ -57,6 +57,7 @@
 #load "frame.jai";
 #load "package.jai";
 #load "material.jai";
+#load "scene.jai";
 
 #scope_module
 
