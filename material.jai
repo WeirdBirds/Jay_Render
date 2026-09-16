@@ -51,6 +51,7 @@ Material :: struct(vs_name: string, fs_name: string, domain: Material_Domain = .
             total := generate_wrappers(fragment_reflection, *body_builder, *packer_builder, .FRAGMENT, "fragment", vertex_end);
         print_to_builder(*body_builder, "};\n\n");
         emit_upload_proc(*body_builder, *packer_builder, total);
+        emit_asset_lifecycle(*body_builder);
 
         compile_stage_wrapper(vertex_path, vertex_reflection, 0, .VERTEX, v_id.id, domain);
         compile_stage_wrapper(fragment_path, fragment_reflection, vertex_end, .FRAGMENT, fragment_package_id.id, domain);
@@ -62,6 +63,36 @@ Material :: struct(vs_name: string, fs_name: string, domain: Material_Domain = .
 
 upload_material :: (data: *Render_Data, material: $M) -> Material_Id {
     return M.upload(data, material);
+}
+
+make_material :: (material: $M) -> Handle {
+    Asset_Registry.ensure_registered(M, M.asset_load, M.asset_unload);
+    return retain(material);
+}
+
+get_material_id :: (handle: Handle) -> Material_Id {
+    found, id := table_find(*render.data.material_ids, reinterp(u64, handle.type) ^ cast(u64)handle.index * 1099511628211);
+    assert(found, "material: id missing, asset load did not run");
+    return id;
+}
+
+emit_asset_lifecycle :: (body_builder: *String_Builder) {
+    print_to_builder(body_builder, "asset_load :: (slot: *Asset_Registry.Asset_Slot) -> bool {\n");
+    print_to_builder(body_builder, "    if slot.object == null return false;\n");
+    print_to_builder(body_builder, "    assert(render.data_initialized, \"Material asset retained before renderer init\");\n");
+    print_to_builder(body_builder, "    data := *render.data;\n");
+    print_to_builder(body_builder, "    o := cast(*Material(vs_name, fs_name, domain))slot.object;\n");
+    print_to_builder(body_builder, "    id := upload(data, o.*);\n");
+    print_to_builder(body_builder, "    table_add(*data.material_ids, reinterp(u64, Material(vs_name, fs_name, domain)) ^ cast(u64)slot.index * 1099511628211, id);\n");
+    print_to_builder(body_builder, "    return true;\n");
+    print_to_builder(body_builder, "}\n");
+    print_to_builder(body_builder, "asset_unload :: (slot: *Asset_Registry.Asset_Slot) {\n");
+    print_to_builder(body_builder, "    if render.data_initialized {\n");
+    print_to_builder(body_builder, "        table_remove(*render.data.material_ids, reinterp(u64, Material(vs_name, fs_name, domain)) ^ cast(u64)slot.index * 1099511628211);\n");
+    print_to_builder(body_builder, "    }\n");
+    print_to_builder(body_builder, "    if slot.object != null free(slot.object);\n");
+    print_to_builder(body_builder, "    slot.object = null;\n");
+    print_to_builder(body_builder, "}\n");
 }
 
 #scope_module
@@ -114,7 +145,7 @@ emit_upload_proc :: (body_builder: *String_Builder, packer_builder: *String_Buil
         print_to_builder(body_builder, "    assert(cpu != null && gpu != 0, \"Material: GPU allocation failed\");\n");
         print_to_builder(body_builder, "    cpu8 := cast(*u8) cpu;\n");
         print_to_builder(body_builder, "%", packer_text);
-        print_to_builder(body_builder, "    hash: u64 = 14695981039346656037;\n");
+            print_to_builder(body_builder, "    hash: u64 = 14695981039346656037;\n");
         print_to_builder(body_builder, "    for i: 0..%-1 {\n", total);
         print_to_builder(body_builder, "        hash ^= xx (cpu8 + i).*;\n");
         print_to_builder(body_builder, "        hash *= 1099511628211;\n");
@@ -305,42 +336,12 @@ default_sampler_index :: (data: *Render_Data) -> u32 {
     return cast(u32) data.default_sampler;
 }
 
-// Resolve a texture asset to a bindless view index, uploading once.
-// The Name comes from Name.static at the recipe site, so the png handler
-// prepared its package at compile time and get_asset serves it here.
-// Runs at scene-build time; the copy targets a fresh texture nothing
-// else touches, so no sync needed.
 resolve_texture_index :: (data: *Render_Data, name: Name) -> u32 {
-    found := table_find_pointer(*data.texture_cache, name.id);
-    if found return cast(u32) found.view;
-
-    image := get_asset(Image_Data, name);
-    assert(image != null, "material: texture asset missing");
-    assert(image.pixels.data != null && image.width > 0 && image.height > 0,
-        "material: texture asset empty");
-
-    result, texture := gpu_create_texture(.{
-        dimensions = .[xx image.width, xx image.height, 1],
-        format = .R8G8B8A8_SRGB,
-        usage = .SAMPLED | .TRANSFER_DST,
-    });
-    assert(result == .SUCCESS && texture != 0, "material: texture creation failed");
-    byte_count := cast(s64) image.width * cast(s64) image.height * 4;
-    staging, staging_gpu := gpu_malloc(byte_count);
-    assert(staging != null && staging_gpu != 0, "material: texture staging failed");
-    memcpy(staging, image.pixels.data, byte_count);
-    submit_result, cmd := gpu_start_command_recording(gpu_get_queue(.MAIN, 0));
-    assert(submit_result == .SUCCESS, "material: texture command recording failed");
-    copy_result := gpu_copy_to_texture(cmd, texture, staging_gpu);
-    assert(copy_result == .SUCCESS, "material: texture copy failed");
-    gpu_submit(cmd);
-    gpu_wait_idle();
-    gpu_free(staging);
-
-    view := gpu_texture_view(texture);
-    assert(view != 0, "material: texture view creation failed");
-    table_add(*data.texture_cache, name.id, Uploaded_Texture.{ texture = texture, view = view });
-    return cast(u32) view;
+    handle := retain(Image_Data, name);
+    assert(!is_null(handle), "material: texture asset missing");
+    image := get_asset(handle, Image_Data);
+    array_add(*data.texture_holds, handle);
+    return cast(u32) image.view;
 }
 
 #scope_file

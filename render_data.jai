@@ -16,7 +16,8 @@ Render_Data :: struct {
     vertex_allocator:   Allocator;
     index_allocator:    Allocator;
     material_cache: Table(u64, Uploaded_Material);
-    texture_cache:  Table(u64, Uploaded_Texture);
+    texture_holds:  [..]Handle;
+    material_ids:   Table(u64, Material_Id);
     default_sampler: Gpu_Sampler;
 
     dynamic: [MAX_FRAMES_IN_FLIGHT]Frame_Params;
@@ -236,11 +237,10 @@ render_data_destroy :: (data: *Render_Data) {
         if it.allocation != null gpu_free(it.allocation);
     }
     deinit(*data.material_cache);
+    deinit(*data.material_ids);
 
-    for data.texture_cache {
-        if it.texture != 0 gpu_free(it.texture);
-    }
-    deinit(*data.texture_cache);
+    for data.texture_holds release(it);
+    array_free(data.texture_holds);
     if data.default_sampler != 0 gpu_free(data.default_sampler);
 
     gpu_heap_destroy(*data.vertex_allocator);

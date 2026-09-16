@@ -1,6 +1,8 @@
 Mesh_Data :: struct {
     vertices: []Vertex;
     indices:  []u32;
+    mesh_id:  u32;
+    gpu:      Mesh_GPU;
 }
 
 Vertex :: struct {
@@ -35,23 +37,50 @@ new_mesh_instance :: (
     return instance_id;
 }
 
-gpu_upload_mesh :: (data: *Render_Data, mesh: Mesh_Data) -> u32 {
-    assert(mesh.vertices.count > 0 && mesh.indices.count > 0, "Jay_Render: mesh must contain vertices and indices");
+mesh_asset_load :: (slot: *Asset_Registry.Asset_Slot) -> bool {
+    assert(render.data_initialized, "Mesh asset retained before renderer init");
+    if slot.object == null return false;
+    data := *render.data;
+    mesh := cast(*Mesh_Data)slot.object;
+    if mesh.vertices.count == 0 || mesh.indices.count == 0 return false;
     assert(data.mesh_pool.thumbstones.count > 0 || data.mesh_pool.max < MAX_MESHES,
         "Jay_Render: MAX_MESHES reached");
 
-    mesh_id := get_index(*data.mesh_pool);
+    mesh.mesh_id = get_index(*data.mesh_pool);
     verts := array_copy(mesh.vertices,, allocator = data.vertex_allocator);
     idxs := array_copy(mesh.indices,, allocator = data.index_allocator);
     assert(verts && idxs, "Jay_Render: mesh heap allocation failed");
 
-    data.meshes_cpu[mesh_id] = .{
+    mesh.gpu = .{
         first_index = cast(u32) to_element_offset(data.index_allocator, idxs.data, size_of(u32)),
         index_count = cast(u32) idxs.count,
         vertex_offset = cast(s32) to_element_offset(data.vertex_allocator, verts.data, size_of(Vertex)),
     };
-    return mesh_id;
+    data.meshes_cpu[mesh.mesh_id] = mesh.gpu;
+    return true;
 }
+
+mesh_asset_unload :: (slot: *Asset_Registry.Asset_Slot) {
+    if slot.object == null return;
+    mesh := cast(*Mesh_Data)slot.object;
+    if render.data_initialized {
+        gpu_wait_idle();
+        data := *render.data;
+        vbase, _ := gpu_heap_head(data.vertex_allocator);
+        ibase, _ := gpu_heap_head(data.index_allocator);
+        vptr := vbase + cast(s64)mesh.gpu.vertex_offset * size_of(Vertex);
+        iptr := ibase + cast(s64)mesh.gpu.first_index * size_of(u32);
+        push_allocator(data.vertex_allocator);
+        free(vptr);
+        push_allocator(data.index_allocator);
+        free(iptr);
+        free_index(*data.mesh_pool, mesh.mesh_id);
+    }
+    free(slot.object);
+    slot.object = null;
+}
+
+
 
 #scope_module
 

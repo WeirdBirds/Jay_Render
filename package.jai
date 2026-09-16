@@ -1,3 +1,9 @@
+register_render_asset_types :: () {
+        Asset_Registry.register_asset_type(Mesh_Data, mesh_asset_load, mesh_asset_unload);
+        Asset_Registry.register_asset_type(Image_Data, image_asset_load, image_asset_unload);
+        Asset_Registry.register_asset_type(Shader_Data, shader_asset_load, shader_asset_unload);
+}
+
 Jay_Render :: struct {
 
     after: Lifecycle.SimulationComplete;
@@ -5,6 +11,7 @@ Jay_Render :: struct {
 
     before_begin :: (engine: *Engine) {
         log("Starting Jay_Render");
+        register_render_asset_types();
         validate_render_config();
 
         gpu_result := gpu_init();

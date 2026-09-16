@@ -14,6 +14,10 @@ Render_Pipeline_Id :: enum {
     COUNT;
 }
 
+retain_shader :: (path: string) -> Handle {
+    return retain(Shader_Data, Name.new(tprint(path)));
+}
+
 create_pipelines :: (data: *Render_Data) {
     #run {
         compile_pipeline_shader("/shaders/compute/reset.slang");
@@ -26,17 +30,31 @@ create_pipelines :: (data: *Render_Data) {
         compile_pipeline_shader("/shaders/fragment/translucent_composite.slang");
     }
 
-    reset_spv   := get_asset(Shader_Data, "/shaders/compute/reset.slang");
-    cull_spv    := get_asset(Shader_Data, "/shaders/compute/count_cull.slang");
-    prefix_spv  := get_asset(Shader_Data, "/shaders/compute/prefix.slang");
-    scatter_spv := get_asset(Shader_Data, "/shaders/compute/scatter.slang");
-    build_spv   := get_asset(Shader_Data, "/shaders/compute/build_draws.slang");
-    hiz_spv     := get_asset(Shader_Data, "/shaders/compute/hiz_downsample.slang");
-    translucent_vs_spv := get_asset(Shader_Data, "/shaders/vertex/translucent_composite.slang");
-    translucent_fs_spv := get_asset(Shader_Data, "/shaders/fragment/translucent_composite.slang");
+    reset_h := retain_shader("/shaders/compute/reset.slang");
+    defer release(reset_h);
+    cull_h := retain_shader("/shaders/compute/count_cull.slang");
+    defer release(cull_h);
+    prefix_h := retain_shader("/shaders/compute/prefix.slang");
+    defer release(prefix_h);
+    scatter_h := retain_shader("/shaders/compute/scatter.slang");
+    defer release(scatter_h);
+    build_h := retain_shader("/shaders/compute/build_draws.slang");
+    defer release(build_h);
+    hiz_h := retain_shader("/shaders/compute/hiz_downsample.slang");
+    defer release(hiz_h);
+    translucent_vs_h := retain_shader("/shaders/vertex/translucent_composite.slang");
+    defer release(translucent_vs_h);
+    translucent_fs_h := retain_shader("/shaders/fragment/translucent_composite.slang");
+    defer release(translucent_fs_h);
 
-    assert(reset_spv && cull_spv && prefix_spv && scatter_spv && build_spv && hiz_spv && translucent_vs_spv && translucent_fs_spv,
-        "Jay_Render: shader asset loading failed");
+    reset_spv   := get_asset(reset_h, Shader_Data);
+    cull_spv    := get_asset(cull_h, Shader_Data);
+    prefix_spv  := get_asset(prefix_h, Shader_Data);
+    scatter_spv := get_asset(scatter_h, Shader_Data);
+    build_spv   := get_asset(build_h, Shader_Data);
+    hiz_spv     := get_asset(hiz_h, Shader_Data);
+    translucent_vs_spv := get_asset(translucent_vs_h, Shader_Data);
+    translucent_fs_spv := get_asset(translucent_fs_h, Shader_Data);
 
     data.pipelines[Render_Pipeline_Id.RESET] = gpu_create_compute_pipeline(reset_spv.code_words, "Jay_Render reset");
     data.pipelines[Render_Pipeline_Id.COUNT_CULL] = gpu_create_compute_pipeline(cull_spv.code_words, "Jay_Render count-cull");
@@ -66,9 +84,12 @@ create_pipelines :: (data: *Render_Data) {
     if opaque_registry_count > 0 {
         for i: 0..opaque_registry_count - 1 {
             entry := opaque_registry[i];
-            vs_spv := get_asset(Shader_Data, entry.vertex_id);
-            fs_spv := get_asset(Shader_Data, entry.fragment_id);
-            assert(vs_spv && fs_spv, "Jay_Render: opaque material shader asset loading failed");
+            vs_h := retain(Shader_Data, entry.vertex_id);
+            defer release(vs_h);
+            fs_h := retain(Shader_Data, entry.fragment_id);
+            defer release(fs_h);
+            vs_spv := get_asset(vs_h, Shader_Data);
+            fs_spv := get_asset(fs_h, Shader_Data);
 
             raster: Gpu_Raster_Desc = .{
                 cull = .CCW,
@@ -85,9 +106,12 @@ create_pipelines :: (data: *Render_Data) {
     if translucent_registry_count > 0 {
         for i: 0..translucent_registry_count - 1 {
             entry := translucent_registry[i];
-            vs_spv := get_asset(Shader_Data, entry.vertex_id);
-            fs_spv := get_asset(Shader_Data, entry.fragment_id);
-            assert(vs_spv && fs_spv, "Jay_Render: translucent material shader asset loading failed");
+            vs_h := retain(Shader_Data, entry.vertex_id);
+            defer release(vs_h);
+            fs_h := retain(Shader_Data, entry.fragment_id);
+            defer release(fs_h);
+            vs_spv := get_asset(vs_h, Shader_Data);
+            fs_spv := get_asset(fs_h, Shader_Data);
 
             raster: Gpu_Raster_Desc = .{
                 cull = .CCW,
@@ -124,7 +148,7 @@ create_pipelines :: (data: *Render_Data) {
 
 // Pipeline #run owns Slang packaging (no generic slang handler).
 // It compiles each shader and writes its Shader_Data package so runtime
-// get_asset loads owned SPIR-V bytes. Shared with Material #insert, which
+// retains serve owned SPIR-V bytes. Shared with Material #insert, which
 // packages exactly the shaders materials use.
 compile_pipeline_shader :: (asset_path: string) {
     source_path := get_asset_source_path(asset_path);
