@@ -1,4 +1,4 @@
-new_draw_group :: (data: *Render_Data, mesh_id: u32, pipeline: u32, domain: Material_Domain) -> u32 {
+new_draw_group :: (data: *Render_Data, mesh: *Mesh_Data, material_index: u32, pipeline: u32, domain: Material_Domain) -> u32 {
     assert(data.group_pool.thumbstones.count > 0 || data.group_pool.max < MAX_GROUPS,
         "Jay_Render: MAX_GROUPS reached");
     assert(domain == .OPAQUE || domain == .TRANSLUCENT,
@@ -10,7 +10,11 @@ new_draw_group :: (data: *Render_Data, mesh_id: u32, pipeline: u32, domain: Mate
     }
 
     group_id := get_index(*data.group_pool);
-    data.groups_cpu[group_id] = .{mesh_id = mesh_id, pipeline = pipeline, domain = cast(u32) domain};
+    data.groups_cpu[group_id] = .{
+        mesh_id = mesh._gpu.descriptors[material_index],
+        pipeline = pipeline,
+        domain = cast(u32) domain,
+    };
     #if DEBUG { assert(group_id < MAX_GROUPS); }
     return group_id;
 }

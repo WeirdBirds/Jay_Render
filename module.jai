@@ -8,6 +8,7 @@
     MAX_GROUPS := 65536,
     MAX_DRAWS := 65536,
     MAX_MATERIALS := 1024,
+    MAX_MATERIAL_SLOTS := 10,
 
     GPU_HEAP_ALIGNMENT := 8,
     VERTEX_HEAP_BUDGET := 512 * 1024,
@@ -57,7 +58,7 @@
 #load "frame.jai";
 #load "package.jai";
 #load "material.jai";
-#load "scene.jai";
+#load "system_group.jai";
 
 #scope_module
 
