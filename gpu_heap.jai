@@ -21,6 +21,11 @@ gpu_heap_destroy :: (allocator: *Allocator) {
     if !allocator.data return;
 
     data: *Gpu_Heap_Data = allocator.data;
+
+    // Tell Basic's memory debugger that heap suballocations die with heap.
+    // Their mapped pointers become invalid when backing GPU buffer is freed.
+    destroy_heap(allocator.*);
+
     // Free by device base. It remains stable even when host mapping details
     // differ across SGPU allocation modes.
     if data.gpu_base != 0 {
